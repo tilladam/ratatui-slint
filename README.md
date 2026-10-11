@@ -67,8 +67,11 @@ Key points:
   cannot keep up with. Half-blocks encode inline. See `SlintPane::set_encode_mode`.
 - **Protocol.** It is detected at startup. Override it with
   `RATATUI_SLINT_PROTOCOL=halfblocks|sixel|kitty|iterm2`.
-- **Kitty compression.** Set `RATATUI_SLINT_KITTY_COMPRESSION=1` or `TerminalOptions::kitty_compression`
-  over slow links. In one measurement it cut kitty output about 55-fold, at some CPU cost per frame.
+- **Kitty compression.** On by default when the terminal accepts it: UI frames compress about
+  85-fold for a few milliseconds of encode time, which took Ghostty from 3 to 33 fps full screen.
+  Turn it off with `RATATUI_SLINT_KITTY_COMPRESSION=0` or `TerminalOptions::kitty_compression`.
+- **Measuring.** `cargo run --release --example termbench` reports fps and where each frame's
+  time goes in the terminal it runs in.
 - **Font zoom.** On `Event::Resize`, pass `terminal::cell_size()` to `SlintPane::set_font_size`
   so panes follow a changed cell size.
 

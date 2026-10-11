@@ -12,13 +12,9 @@ use slint::platform::WindowEvent;
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::{ComponentHandle, PhysicalSize};
 
-use crate::encode::{EncodeMode, Encoder, Job, to_image};
+use crate::encode::{EncodeMode, Encoder, Frame, Job, Pixel};
 use crate::platform::Waker;
 
-#[cfg(not(feature = "transparency"))]
-type Pixel = slint::Rgb8Pixel;
-#[cfg(feature = "transparency")]
-type Pixel = slint::platform::software_renderer::PremultipliedRgbaColor;
 
 /// How a kitty pane assigns image ids to frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -134,9 +130,9 @@ pub(crate) fn pixel_size(area: Rect, font: FontSize) -> Option<(u32, u32)> {
 pub struct FrameStats {
     /// Slint software rendering into the framebuffer.
     pub render: std::time::Duration,
-    /// Framebuffer copy into an image plus protocol construction, on the UI thread.
+    /// Framebuffer copy handed to the encoder, on the UI thread.
     pub snapshot: std::time::Duration,
-    /// Protocol encoding, on whichever thread ran it.
+    /// Image conversion and protocol encoding, on whichever thread ran it.
     pub encode: std::time::Duration,
 }
 
@@ -383,14 +379,22 @@ impl<C: ComponentHandle> SlintPane<C> {
         });
         if drawn {
             self.stats.render = start.elapsed();
+            // Only a copy of the framebuffer happens here; conversion, hashing and encoding run
+            // in the encoder (on its worker thread unless the mode is inline).
             let start = std::time::Instant::now();
-            if let Some(image) = to_image(w, h, self.snapshot_bytes(), self.keeps_alpha()) {
-                let (protocol_type, kitty_id) = self.frame_protocol_type();
-                let protocol = StatefulProtocol::new(image, self.font, self.picker_background(), protocol_type);
-                let size = Size::new(self.area.width, self.area.height);
-                self.stats.snapshot = start.elapsed();
-                self.encoder.submit(Job { generation: self.generation, size, protocol, kitty_id });
-            }
+            let (protocol_type, kitty_id) = self.frame_protocol_type();
+            let frame = Frame {
+                pixels: self.pixels.clone(),
+                width: w,
+                height: h,
+                keep_alpha: self.keeps_alpha(),
+                background: self.background,
+                font: self.font,
+                protocol_type,
+            };
+            let size = Size::new(self.area.width, self.area.height);
+            self.stats.snapshot = start.elapsed();
+            self.encoder.submit(Job { generation: self.generation, size, frame, kitty_id });
         }
         if let Some(done) = self.encoder.take_latest(self.generation) {
             self.stats.encode = done.elapsed;
@@ -424,44 +428,10 @@ impl<C: ComponentHandle> SlintPane<C> {
         }
     }
 
-    fn picker_background(&self) -> Option<image::Rgba<u8>> {
-        let [r, g, b] = self.background;
-        Some(image::Rgba([r, g, b, 255]))
-    }
-
     /// Kitty and iTerm2 carry an alpha channel; half-blocks and sixel get composited.
     fn keeps_alpha(&self) -> bool {
         cfg!(feature = "transparency")
             && matches!(self.picker.protocol_type(), ProtocolType::Kitty | ProtocolType::Iterm2)
-    }
-
-    #[cfg(not(feature = "transparency"))]
-    fn snapshot_bytes(&self) -> Vec<u8> {
-        let mut out = Vec::with_capacity(self.pixels.len() * 3);
-        for p in &self.pixels {
-            out.extend_from_slice(&[p.r, p.g, p.b]);
-        }
-        out
-    }
-
-    #[cfg(feature = "transparency")]
-    fn snapshot_bytes(&self) -> Vec<u8> {
-        let alpha = self.keeps_alpha();
-        let [br, bg, bb] = self.background;
-        let mut out = Vec::with_capacity(self.pixels.len() * if alpha { 4 } else { 3 });
-        for p in &self.pixels {
-            if alpha {
-                // Slint renders premultiplied alpha; image encoders expect straight alpha.
-                let un = |c: u8| if p.alpha == 0 { 0 } else { ((c as u32 * 255) / p.alpha as u32).min(255) as u8 };
-                out.extend_from_slice(&[un(p.red), un(p.green), un(p.blue), p.alpha]);
-            } else {
-                // Composite the premultiplied colour over the background.
-                let inv = 255 - p.alpha as u32;
-                let over = |c: u8, b: u8| (c as u32 + (b as u32 * inv) / 255).min(255) as u8;
-                out.extend_from_slice(&[over(p.red, br), over(p.green, bg), over(p.blue, bb)]);
-            }
-        }
-        out
     }
 
     /// Draws the most recent encoded image. Used by [`crate::SlintWidget`].

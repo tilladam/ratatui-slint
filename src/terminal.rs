@@ -32,7 +32,10 @@ pub struct TerminalOptions {
     pub focus_change: bool,
     /// Ask for the kitty keyboard protocol, so key releases and repeats are reported.
     pub keyboard_enhancement: bool,
-    /// Probe for kitty zlib compression. Costs CPU per frame; saves bandwidth over SSH.
+    /// Probe for kitty zlib compression, and use it when the terminal accepts it. On by default:
+    /// UI frames are mostly flat colour and compress about 85-fold for 2–3 ms of encode time at
+    /// 2688 × 1836 px, which took Ghostty from 3 to 33 fps. Photographic content compresses far
+    /// worse and costs more CPU.
     /// `RATATUI_SLINT_KITTY_COMPRESSION=1` (or `0`) overrides this.
     pub kitty_compression: bool,
     /// Force a protocol instead of detecting one. The `RATATUI_SLINT_PROTOCOL` environment
@@ -48,7 +51,7 @@ impl Default for TerminalOptions {
             bracketed_paste: true,
             focus_change: true,
             keyboard_enhancement: true,
-            kitty_compression: false,
+            kitty_compression: true,
             protocol: None,
             query_timeout: Duration::from_millis(1000),
         }
