@@ -1,0 +1,12 @@
+# Rust
+target/
+frame.png
+
+# Secrets
+.env
+.env.*
+
+# Local tool state
+.agents/
+.claude/
+.DS_Store

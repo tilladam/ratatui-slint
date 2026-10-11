@@ -1,0 +1,11 @@
+[package]
+name = "slint_in_ratatui"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts", "software-renderer-path"] }
+ratatui = "0.30"
+crossterm = "0.29"
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm", "image-defaults"] }
+image = { version = "0.25", default-features = false, features = ["png"] }
