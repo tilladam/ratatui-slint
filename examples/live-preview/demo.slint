@@ -1,0 +1,31 @@
+// Edit this file while the preview runs: it reloads on save.
+import { Button, CheckBox, Slider } from "std-widgets.slint";
+
+export component Demo inherits Window {
+    in-out property <int> counter: 0;
+    in-out property <float> level: 40;
+    in-out property <bool> glow: true;
+    background: #10151b;
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 12px;
+        Text { text: "Live preview"; font-size: 24px; color: #e6edf3; }
+        HorizontalLayout {
+            spacing: 12px;
+            Button { text: "Count: " + root.counter; clicked => { root.counter += 1; } }
+            CheckBox { text: "Glow"; checked <=> root.glow; }
+        }
+        Slider { minimum: 0; maximum: 100; value <=> root.level; }
+        Rectangle {
+            border-radius: 12px;
+            background: root.glow ? #1f6feb : #30363d;
+            animate background { duration: 300ms; }
+            Rectangle {
+                x: 0; width: parent.width * root.level / 100; border-radius: 12px;
+                background: @linear-gradient(90deg, #3fb950 0%, #f0883e 100%);
+                animate width { duration: 200ms; }
+            }
+        }
+    }
+}

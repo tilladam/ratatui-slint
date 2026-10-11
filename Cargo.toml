@@ -1,0 +1,43 @@
+[package]
+name = "ratatui-slint"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.88"
+license = "MIT"
+description = "Embed Slint components as pixel widgets inside ratatui applications"
+repository = "https://github.com/tilladam/ratatui-slint"
+readme = "README.md"
+keywords = ["ratatui", "slint", "tui", "terminal", "gui"]
+categories = ["command-line-interface", "gui"]
+exclude = ["spike/"]
+
+[features]
+default = ["image-decoders"]
+## Decode PNG/JPEG and SVG images used in .slint files, including the std-widgets icons. The public
+## `slint` crate only enables this through its windowing backends, so it is switched on here via a
+## feature-only dependency on `i-slint-core`; no `i-slint-core` API is used.
+image-decoders = ["dep:i-slint-core"]
+## Render panes with an alpha channel (premultiplied in Slint, converted to straight alpha
+## for the image encoders). Off by default: panes are opaque.
+transparency = []
+
+[dependencies]
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts", "software-renderer-path", "image-default-formats"] }
+ratatui = "0.30"
+crossterm = "0.29"
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm", "image-defaults"] }
+image = { version = "0.25", default-features = false }
+base64 = "0.22"
+# Feature unification only; see the `image-decoders` feature. Caret requirement so it resolves to
+# the exact version `slint` pins.
+i-slint-core = { version = "1.18", optional = true, default-features = false, features = ["image-decoders", "svg"] }
+
+[dev-dependencies]
+sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+
+[workspace]
+members = ["examples/live-preview"]
+exclude = ["spike"]
+
+[profile.dev.package."*"]
+opt-level = 2

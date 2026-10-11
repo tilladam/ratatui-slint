@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""Run a TUI example inside a pseudo-terminal that answers terminal queries.
+
+Answers the queries ratatui-image and crossterm send at startup (device attributes, cell size,
+cursor position, kitty graphics), so an example can be smoke-tested without a real terminal.
+Sends scripted input, records everything the program writes, and reports checks.
+
+    scripts/fake_terminal.py [--protocol none|sixel|kitty] [--cols 120] [--rows 40]
+                             [--script "2:click 70 10;3:key +;5:key q"] [--timeout 20]
+                             [--log out.bin] -- ./target/debug/examples/sysmon
+
+Script steps are "<seconds>:<action>", separated by ';'. Actions:
+  key <text>        send text (escapes like \\x1b allowed)
+  click <col> <row> SGR mouse press and release, 1-based terminal cells
+  paste <text>      bracketed paste
+  mark <name>       record the output byte count under <name> (for idle measurements)
+  run <command>     run a shell command (e.g. edit a watched file)
+"""
+
+import argparse
+import fcntl
+import os
+import pty
+import re
+import select
+import signal
+import struct
+import sys
+import termios
+import time
+
+
+def parse_script(text):
+    steps = []
+    for part in filter(None, (p.strip() for p in text.split(";"))):
+        t, action = part.split(":", 1)
+        steps.append((float(t), action.strip()))
+    return sorted(steps)
+
+
+def plain_text(d):
+    """Output with image payloads and escape sequences removed, whitespace collapsed. Cursor
+    moves become spaces, so words ratatui wrote separately still read as a line."""
+    d = re.sub(rb"\x1b[_P].*?\x1b\\", b"", d, flags=re.S)  # kitty APC, sixel DCS
+    d = re.sub(rb"\x1b\]52;.*?\x07", b"", d, flags=re.S)
+    d = re.sub(rb"\x1b\[\d+;\d+H", b" ", d)
+    d = re.sub(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]", b"", d)
+    return " ".join(d.decode("utf-8", "replace").split())
+
+
+def last_screen(d, rows, cols):
+    """Replays the output on a character grid and returns the screen as it was just before the
+    program left the alternate screen. Handles cursor positioning, CR/LF and erase; ignores
+    colours and images; combining marks take no cell."""
+    import unicodedata
+    end = d.rfind(b"\x1b[?1049l")
+    d = d[:end] if end >= 0 else d
+    d = re.sub(rb"\x1b[_P].*?\x1b\\", b"", d, flags=re.S)
+    d = re.sub(rb"\x1b\][^\x07]*\x07", b"", d, flags=re.S)
+    grid = [[" "] * cols for _ in range(rows)]
+    r = c = 0
+    text = d.decode("utf-8", "replace")
+    i = 0
+    csi = re.compile(r"\x1b\[([0-9;?<>=]*)([ -/]*)([@-~])")
+    while i < len(text):
+        ch = text[i]
+        if ch == "\x1b":
+            m = csi.match(text, i)
+            if m:
+                params, _, final = m.groups()
+                if final == "H":
+                    parts = [p for p in params.split(";")]
+                    r = (int(parts[0]) if parts and parts[0] else 1) - 1
+                    c = (int(parts[1]) if len(parts) > 1 and parts[1] else 1) - 1
+                elif final == "J" and params in ("2", "3"):
+                    grid = [[" "] * cols for _ in range(rows)]
+                i = m.end()
+            else:
+                i += 2
+            continue
+        if ch == "\r":
+            c = 0
+        elif ch == "\n":
+            r += 1
+        elif unicodedata.combining(ch) or ord(ch) < 32:
+            pass
+        else:
+            if 0 <= r < rows and 0 <= c < cols:
+                grid[r][c] = ch
+            c += 1
+        i += 1
+    return "\n".join("".join(row) for row in grid)
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--protocol", default="none", choices=["none", "sixel", "kitty"])
+    ap.add_argument("--cols", type=int, default=120)
+    ap.add_argument("--rows", type=int, default=40)
+    ap.add_argument("--cell", default="10x20", help="cell size in pixels, WxH")
+    ap.add_argument("--script", default="")
+    ap.add_argument("--timeout", type=float, default=20)
+    ap.add_argument("--log")
+    ap.add_argument("--screen", action="store_true", help="print the last screen")
+    ap.add_argument("--env", action="append", default=[], help="NAME=VALUE for the child")
+    ap.add_argument("--expect", action="append", default=[], help="text that must appear on screen")
+    ap.add_argument("cmd", nargs=argparse.REMAINDER)
+    args = ap.parse_args()
+    cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
+    cw, ch = (int(v) for v in args.cell.split("x"))
+
+    pid, fd = pty.fork()
+    if pid == 0:
+        for kv in args.env:
+            k, v = kv.split("=", 1)
+            os.environ[k] = v
+        os.environ["TERM"] = "xterm-256color"
+        os.execvp(cmd[0], cmd)
+
+    winsize = struct.pack("HHHH", args.rows, args.cols, args.cols * cw, args.rows * ch)
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, winsize)
+
+    out = bytearray()
+    scanned = 0
+    marks = {}
+    replies = []
+    steps = parse_script(args.script)
+    start = time.monotonic()
+    status = None
+
+    def send(data):
+        os.write(fd, data)
+
+    while True:
+        elapsed = time.monotonic() - start
+        while steps and steps[0][0] <= elapsed:
+            _, action = steps.pop(0)
+            verb, _, rest = action.partition(" ")
+            if verb == "key":
+                send(rest.encode().decode("unicode_escape").encode())
+            elif verb == "click":
+                c, r = rest.split()
+                send(f"\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m".encode())
+            elif verb == "paste":
+                send(b"\x1b[200~" + rest.encode() + b"\x1b[201~")
+            elif verb == "mark":
+                marks[rest] = len(out)
+            elif verb == "run":
+                import subprocess
+                subprocess.run(rest, shell=True, check=False)
+        if elapsed > args.timeout:
+            os.kill(pid, signal.SIGKILL)
+            status = "timeout"
+            break
+        r, _, _ = select.select([fd], [], [], 0.02)
+        if r:
+            try:
+                data = os.read(fd, 65536)
+            except OSError:
+                data = b""
+            if not data:
+                _, st = os.waitpid(pid, 0)
+                status = os.waitstatus_to_exitcode(st)
+                break
+            out += data
+            # Answer queries found in the new output.
+            chunk = bytes(out[max(0, scanned - 16):])
+            scanned = len(out)
+            for m in re.finditer(rb"\x1b_G([^\x1b]*)\x1b\\", chunk):
+                if b"a=q" in m.group(1) and args.protocol == "kitty":
+                    idm = re.search(rb"i=(\d+)", m.group(1))
+                    send(b"\x1b_Gi=" + (idm.group(1) if idm else b"31") + b";OK\x1b\\")
+                    replies.append("kitty-ok")
+            if b"\x1b[16t" in chunk:
+                send(f"\x1b[6;{ch};{cw}t".encode())
+                replies.append("cell-size")
+            if b"\x1b[14t" in chunk:
+                send(f"\x1b[4;{args.rows * ch};{args.cols * cw}t".encode())
+            if b"\x1b[?u" in chunk:
+                pass  # no kitty keyboard protocol: no reply, like most terminals
+            if b"\x1b[c" in chunk:
+                send(b"\x1b[?62;4;22c" if args.protocol == "sixel" else b"\x1b[?62;22c")
+                replies.append("da1")
+            if b"\x1b[5n" in chunk:
+                send(b"\x1b[0n")
+            for _ in range(chunk.count(b"\x1b[6n")):
+                send(b"\x1b[1;1R")
+                replies.append("cursor")
+        try:
+            done, st = os.waitpid(pid, os.WNOHANG)
+            if done:
+                status = os.waitstatus_to_exitcode(st)
+                # Drain what is left.
+                while True:
+                    r, _, _ = select.select([fd], [], [], 0.05)
+                    if not r:
+                        break
+                    try:
+                        data = os.read(fd, 65536)
+                    except OSError:
+                        break
+                    if not data:
+                        break
+                    out += data
+                break
+        except ChildProcessError:
+            break
+
+    if args.log:
+        with open(args.log, "wb") as f:
+            f.write(out)
+    d = bytes(out)
+    checks = {
+        "exit status": status,
+        "seconds": round(time.monotonic() - start, 1),
+        "bytes written": len(d),
+        "query replies": ",".join(sorted(set(replies))),
+        "entered alt screen": b"\x1b[?1049h" in d,
+        "left alt screen": b"\x1b[?1049l" in d,
+        "mouse capture off": b"\x1b[?1000l" in d,
+        "half-block glyphs": "▀".encode() in d,
+        "sixel data": b"\x1bP" in d and b"q\"" in d,
+        "kitty transmit": b"\x1b_Ga=T" in d or b",a=T," in d,
+    }
+    text = plain_text(d)
+    screen = last_screen(d, args.rows, args.cols)
+    screen_flat = " ".join(screen.split())
+    failed = [e for e in args.expect if " ".join(e.split()) not in text and " ".join(e.split()) not in screen_flat]
+    for e in args.expect:
+        checks[f"expect {e!r}"] = e not in failed
+    names = sorted(marks, key=marks.get)
+    for a, b in zip(names, names[1:]):
+        checks[f"bytes {a}->{b}"] = marks[b] - marks[a]
+        if 0 < marks[b] - marks[a] <= 2000:
+            checks[f"content {a}->{b}"] = repr(d[marks[a]:marks[b]])
+    for k, v in checks.items():
+        print(f"{k:24} {v}")
+    if args.screen:
+        print(screen)
+    sys.exit(0 if status == 0 and not failed else 1)
+
+
+if __name__ == "__main__":
+    main()

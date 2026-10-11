@@ -1,0 +1,13 @@
+[package]
+name = "live-preview"
+version = "0.1.0"
+edition = "2024"
+license = "MIT"
+publish = false
+description = "Hot-reloading .slint preview in a terminal pane, built on ratatui-slint"
+
+[dependencies]
+ratatui-slint = { path = "../.." }
+slint-interpreter = { version = "1.18", default-features = false, features = ["std", "compat-1-2"] }
+ratatui = "0.30"
+crossterm = "0.29"
