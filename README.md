@@ -65,7 +65,8 @@ Key points:
   touch panel, into the pane. `RATATUI_SLINT_SCALE=auto|<number>` replaces the default.
 - **Encoding.** Sixel, kitty and iTerm2 encode on a worker thread by default, dropping frames it
   cannot keep up with. Half-blocks encode inline. See `SlintPane::set_encode_mode`.
-- **Protocol.** It is detected at startup. Override it with
+- **Protocol.** It is detected at startup. iTerm2 gets its own protocol even though it answers
+  the kitty query, because raw kitty frames are far slower there. Override it with
   `RATATUI_SLINT_PROTOCOL=halfblocks|sixel|kitty|iterm2`.
 - **Kitty compression.** On by default when the terminal accepts it: UI frames compress about
   85-fold for a few milliseconds of encode time, which took Ghostty from 3 to 33 fps full screen.

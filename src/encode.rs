@@ -75,12 +75,69 @@ impl Frame {
         out
     }
 
-    fn into_protocol(self) -> Option<StatefulProtocol> {
-        let image = to_image(self.width, self.height, self.bytes(), self.keep_alpha)?;
-        // No background: the image already fills the cell box exactly, and transparency is
-        // composited above. A background here would make ratatui-image blend a full-size copy.
-        Some(StatefulProtocol::new(image, self.font, None, self.protocol_type))
+    fn to_image(&self) -> Option<DynamicImage> {
+        to_image(self.width, self.height, self.bytes(), self.keep_alpha)
     }
+}
+
+/// An encoded frame ready to draw.
+pub(crate) enum Displayed {
+    /// Encoded by ratatui-image.
+    Stateful(StatefulProtocol),
+    /// iTerm2 inline image encoded here, sized in cells rather than ratatui-image's pixels.
+    Iterm2 { data: String, cells: Size },
+}
+
+impl Displayed {
+    /// The cell size the frame was encoded for.
+    pub fn cells(&self) -> Size {
+        match self {
+            Displayed::Stateful(p) => p.size_for(Resize::Fit(None), Size::new(u16::MAX, u16::MAX)),
+            Displayed::Iterm2 { cells, .. } => *cells,
+        }
+    }
+
+    pub fn render(&mut self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
+        match self {
+            Displayed::Stateful(p) => p.render(area, buf),
+            Displayed::Iterm2 { data, cells } => {
+                use ratatui::buffer::CellDiffOption;
+                let w = cells.width.min(area.width);
+                let h = cells.height.min(area.height);
+                for y in area.y..area.y + h {
+                    for x in area.x..area.x + w {
+                        let Some(cell) = buf.cell_mut((x, y)) else { continue };
+                        if (x, y) == (area.x, area.y) {
+                            cell.set_symbol(data)
+                                .set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
+                        } else {
+                            // The image covers these cells; ratatui must not write over it.
+                            cell.set_diff_option(CellDiffOption::Skip);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+/// The iTerm2 inline-image sequence for `image`, sized to `cells`.
+///
+/// ratatui-image sizes iTerm2 images in pixels from the image dimensions. iTerm2 reports cell
+/// sizes in device pixels, and on a Retina display the image did not appear. Cell units fill the
+/// pane exactly, whatever iTerm2 takes a pixel to be.
+pub(crate) fn iterm2_sequence(image: &DynamicImage, cells: Size, tmux: bool) -> Result<String, String> {
+    use base64::Engine;
+    let mut png = Vec::new();
+    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    let payload = base64::engine::general_purpose::STANDARD.encode(&png);
+    let seq = format!(
+        "\x1b]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=0;doNotMoveCursor=1:{payload}\x07",
+        png.len(),
+        cells.width,
+        cells.height,
+    );
+    Ok(if tmux { format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b")) } else { seq })
 }
 
 pub(crate) struct Job {
@@ -93,18 +150,31 @@ pub(crate) struct Job {
 
 pub(crate) struct Done {
     pub generation: u64,
-    pub protocol: StatefulProtocol,
+    pub protocol: Displayed,
     pub error: Option<String>,
     pub elapsed: std::time::Duration,
     pub kitty_id: Option<u32>,
 }
 
 fn encode(job: Job) -> Option<Done> {
+    use ratatui_image::protocol::StatefulProtocolType;
     let start = std::time::Instant::now();
-    let mut protocol = job.frame.into_protocol()?;
-    // The image already matches the cell box, so Fit only downsamples for half-blocks.
-    protocol.resize_encode(&Resize::Fit(None), job.size);
-    let error = protocol.last_encoding_result().and_then(|r| r.err()).map(|e| e.to_string());
+    let image = job.frame.to_image()?;
+    let (protocol, error) = match job.frame.protocol_type {
+        StatefulProtocolType::ITerm2(iterm2) => match iterm2_sequence(&image, job.size, iterm2.is_tmux) {
+            Ok(data) => (Displayed::Iterm2 { data, cells: job.size }, None),
+            Err(e) => (Displayed::Iterm2 { data: String::new(), cells: job.size }, Some(e)),
+        },
+        protocol_type => {
+            // No background: the image already fills the cell box exactly, and transparency is
+            // composited above. A background would make ratatui-image blend a full-size copy.
+            let mut protocol = StatefulProtocol::new(image, job.frame.font, None, protocol_type);
+            // The image already matches the cell box, so Fit only downsamples for half-blocks.
+            protocol.resize_encode(&Resize::Fit(None), job.size);
+            let error = protocol.last_encoding_result().and_then(|r| r.err()).map(|e| e.to_string());
+            (Displayed::Stateful(protocol), error)
+        }
+    };
     Some(Done { generation: job.generation, protocol, error, elapsed: start.elapsed(), kitty_id: job.kitty_id })
 }
 

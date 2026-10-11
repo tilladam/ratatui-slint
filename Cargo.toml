@@ -26,7 +26,7 @@ slint = { version = "1.18", default-features = false, features = ["std", "compat
 ratatui = "0.30"
 crossterm = "0.29"
 ratatui-image = { version = "11.1", default-features = false, features = ["crossterm", "image-defaults"] }
-image = { version = "0.25", default-features = false }
+image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 # Feature unification only; see the `image-decoders` feature. Caret requirement so it resolves to
 # the exact version `slint` pins.

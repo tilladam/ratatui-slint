@@ -156,3 +156,31 @@ fn auto_scale_follows_the_cell_height() {
     pane.set_scale(Scale::Fixed(1.0));
     assert_eq!(pane.component().get_logical_width(), 640.0);
 }
+
+/// iTerm2 images are sized in cells: pixel sizes did not display on a Retina iTerm2.
+#[test]
+fn iterm2_frames_are_sized_in_cells_and_cover_the_pane() {
+    let rt = Runtime::new().unwrap();
+    let mut pane = rt.create_pane(&picker(ProtocolType::Iterm2), Still::new).unwrap();
+    pane.set_encode_mode(EncodeMode::Inline);
+    let area = Rect::new(2, 1, 12, 3);
+    pane.set_area(area);
+    assert!(pane.update());
+    assert_eq!(pane.displayed_cells(), Some(ratatui::layout::Size::new(12, 3)));
+    let mut term = test_terminal(16, 5);
+    // The completed frame keeps ratatui's per-cell diff options; the backend's screen does not.
+    let frame = term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    let buf = frame.buffer;
+    let first = buf[(2, 1)].symbol();
+    assert!(first.starts_with("\x1b]1337;File=inline=1;"), "{}", &first[..40.min(first.len())]);
+    assert!(first.contains(";width=12;height=3;preserveAspectRatio=0;"));
+    assert!(!first.contains("px"), "sizes must be in cells");
+    // Every other covered cell is skipped so ratatui never writes over the image.
+    for y in 1..4 {
+        for x in 2..14 {
+            if (x, y) != (2, 1) {
+                assert_eq!(buf[(x, y)].diff_option, ratatui::buffer::CellDiffOption::Skip, "cell {x},{y}");
+            }
+        }
+    }
+}

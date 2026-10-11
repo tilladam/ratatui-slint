@@ -6,13 +6,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Rect, Size};
 use ratatui_image::picker::{Picker, ProtocolType};
-use ratatui_image::protocol::{StatefulProtocol, StatefulProtocolType};
-use ratatui_image::{FontSize, ResizeEncodeRender};
+use ratatui_image::protocol::StatefulProtocolType;
+use ratatui_image::FontSize;
 use slint::platform::WindowEvent;
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::{ComponentHandle, PhysicalSize};
 
-use crate::encode::{EncodeMode, Encoder, Frame, Job, Pixel};
+use crate::encode::{Displayed, EncodeMode, Encoder, Frame, Job, Pixel};
 use crate::platform::Waker;
 
 
@@ -166,7 +166,7 @@ pub struct SlintPane<C: ComponentHandle> {
     encoder: Encoder,
     encode_mode: EncodeMode,
     waker: Waker,
-    displayed: Option<(u64, StatefulProtocol)>,
+    displayed: Option<(u64, Displayed)>,
     needs_redraw: bool,
     background: [u8; 3],
     frames: u64,
@@ -255,7 +255,7 @@ impl<C: ComponentHandle> SlintPane<C> {
 
     /// Cell size of the frame currently on display, or `None` before the first frame.
     pub fn displayed_cells(&self) -> Option<Size> {
-        self.displayed.as_ref().map(|(_, p)| p.size_for(ratatui_image::Resize::Fit(None), Size::new(u16::MAX, u16::MAX)))
+        self.displayed.as_ref().map(|(_, p)| p.cells())
     }
 
     /// Timings of the most recent rendered and encoded frame.
@@ -443,7 +443,7 @@ impl<C: ComponentHandle> SlintPane<C> {
         let Some((generation, protocol)) = &mut self.displayed else { return };
         if *generation != self.generation {
             // Encoded for an older size; only draw it if it still fits.
-            let size = protocol.size_for(ratatui_image::Resize::Fit(None), Size::new(area.width, area.height));
+            let size = protocol.cells();
             if size.width > area.width || size.height > area.height {
                 return;
             }

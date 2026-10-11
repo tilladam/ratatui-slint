@@ -94,6 +94,13 @@ pub fn cell_size() -> Option<ratatui_image::FontSize> {
     (w > 0 && h > 0).then(|| ratatui_image::FontSize::new(w, h))
 }
 
+/// Whether the terminal is iTerm2. `LC_TERMINAL` is set by iTerm2 and forwarded by default SSH
+/// configurations; `TERM_PROGRAM` is not forwarded over SSH.
+pub fn is_iterm2() -> bool {
+    std::env::var("LC_TERMINAL").is_ok_and(|v| v == "iTerm2")
+        || std::env::var("TERM_PROGRAM").is_ok_and(|v| v == "iTerm.app")
+}
+
 /// Parses a protocol name as used by `RATATUI_SLINT_PROTOCOL`.
 pub fn parse_protocol(name: &str) -> Option<ProtocolType> {
     match name.to_ascii_lowercase().as_str() {
@@ -137,6 +144,11 @@ impl TerminalSession {
         let forced = std::env::var("RATATUI_SLINT_PROTOCOL").ok().and_then(|v| parse_protocol(&v)).or(options.protocol);
         if let Some(p) = forced {
             picker.set_protocol_type(p);
+        } else if picker.protocol_type() == ProtocolType::Kitty && is_iterm2() {
+            // iTerm2 answers the kitty query but not the compression probe, and reads raw kitty
+            // frames slowly: 1.2 fps full screen, against 14 fps with its own protocol (measured
+            // 2026-10-11).
+            picker.set_protocol_type(ProtocolType::Iterm2);
         }
 
         let mut enabled = 0;
