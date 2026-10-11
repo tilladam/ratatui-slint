@@ -30,6 +30,8 @@ pub(crate) struct Job {
     pub generation: u64,
     pub size: Size,
     pub protocol: StatefulProtocol,
+    /// Kitty image id of this frame; `Some(0)` for the pane's stable id, `None` for other protocols.
+    pub kitty_id: Option<u32>,
 }
 
 pub(crate) struct Done {
@@ -37,6 +39,7 @@ pub(crate) struct Done {
     pub protocol: StatefulProtocol,
     pub error: Option<String>,
     pub elapsed: std::time::Duration,
+    pub kitty_id: Option<u32>,
 }
 
 fn encode(mut job: Job) -> Done {
@@ -44,7 +47,7 @@ fn encode(mut job: Job) -> Done {
     // The image already matches the cell box, so Fit only downsamples for half-blocks.
     job.protocol.resize_encode(&Resize::Fit(None), job.size);
     let error = job.protocol.last_encoding_result().and_then(|r| r.err()).map(|e| e.to_string());
-    Done { generation: job.generation, protocol: job.protocol, error, elapsed: start.elapsed() }
+    Done { generation: job.generation, protocol: job.protocol, error, elapsed: start.elapsed(), kitty_id: job.kitty_id }
 }
 
 pub(crate) struct Slot {

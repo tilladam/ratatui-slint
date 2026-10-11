@@ -83,6 +83,8 @@ fn type_text(router: &mut InputRouter, panes: &[&dyn PaneInput], text: &str) {
 fn editor() -> (Runtime, ratatui_slint::SlintPane<Editor>) {
     let rt = Runtime::new().unwrap();
     let mut pane = rt.create_pane(&halfblocks(), Editor::new).unwrap();
+    // The test geometry is in terminal pixels, so pin one logical pixel to one terminal pixel.
+    pane.set_scale(ratatui_slint::Scale::Fixed(1.0));
     pane.set_area(AREA);
     (rt, pane)
 }
@@ -287,4 +289,43 @@ fn hover_and_pointer_outside_panes() {
     let panes: [&dyn PaneInput; 1] = [&a];
     assert_eq!(router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes), Routed::Unhandled);
     assert_eq!(router.focused(), None);
+}
+
+slint::slint! {
+    export component KeysWithTouchArea inherits Window {
+        in-out property <int> hits;
+        FocusScope {
+            key-pressed(e) => { if (e.text == "+") { root.hits += 1; return accept; } reject }
+            TouchArea {}
+        }
+    }
+    export component KeysOnly inherits Window {
+        in-out property <int> hits;
+        FocusScope {
+            key-pressed(e) => { if (e.text == "+") { root.hits += 1; return accept; } reject }
+        }
+    }
+}
+
+/// Slint behaviour the examples rely on: a click focuses a FocusScope only when no TouchArea
+/// inside it takes the click. Focusing the pane does not focus anything inside it.
+#[test]
+fn click_focuses_a_focus_scope_only_without_inner_touch_area() {
+    let rt = Runtime::new().unwrap();
+    let send = |pane: &dyn PaneInput| {
+        let mut router = InputRouter::new();
+        let panes: [&dyn PaneInput; 1] = [pane];
+        router.route(&mouse(MouseEventKind::Down(MouseButton::Left), 3, 2), &panes);
+        router.route(&mouse(MouseEventKind::Up(MouseButton::Left), 3, 2), &panes);
+        router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes)
+    };
+    let mut with = rt.create_pane(&halfblocks(), KeysWithTouchArea::new).unwrap();
+    with.set_area(Rect::new(0, 0, 20, 5));
+    assert_eq!(send(&with), Routed::Unhandled);
+    assert_eq!(with.component().get_hits(), 0);
+
+    let mut only = rt.create_pane(&halfblocks(), KeysOnly::new).unwrap();
+    only.set_area(Rect::new(0, 0, 20, 5));
+    assert_eq!(send(&only), Routed::Consumed);
+    assert_eq!(only.component().get_hits(), 1);
 }

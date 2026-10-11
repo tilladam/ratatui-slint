@@ -93,6 +93,15 @@ pub(crate) fn set_clipboard_cache(text: String) -> bool {
     })
 }
 
+/// Queues bytes for the terminal, written by [`Runtime::write_pending_output`] after the frame.
+pub(crate) fn queue_output(bytes: &[u8]) {
+    CURRENT.with(|c| {
+        if let Some(shared) = c.borrow().upgrade() {
+            shared.pending_output.borrow_mut().extend_from_slice(bytes);
+        }
+    });
+}
+
 /// Only one platform per process may register Slint's event-loop proxy, because Slint keeps
 /// that proxy in a process-wide slot while the platform itself is per thread.
 static PROXY_CLAIMED: AtomicBool = AtomicBool::new(false);
@@ -387,8 +396,9 @@ impl Runtime {
         self.shared.live_windows().first().is_some_and(|w| w.window().has_active_animations())
     }
 
-    /// Writes queued terminal output (OSC 52 clipboard copies) to `out`. Call between frames,
-    /// with the same writer the terminal backend uses.
+    /// Writes queued terminal output to `out`: OSC 52 clipboard copies and deletion of kitty
+    /// images that a newer frame replaced. Call after every `terminal.draw`, with the same writer
+    /// the terminal backend uses; skipping it lets replaced kitty images pile up in the terminal.
     pub fn write_pending_output(&self, out: &mut impl Write) -> std::io::Result<()> {
         let bytes = std::mem::take(&mut *self.shared.pending_output.borrow_mut());
         if !bytes.is_empty() {

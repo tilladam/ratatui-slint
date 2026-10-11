@@ -157,6 +157,8 @@ impl TerminalSession {
                 PushKeyboardEnhancementFlags(
                     KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
                         | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                        // Without this, crossterm can report Shift+= instead of '+'.
+                        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
                 )
             )?;
             enabled |= KEYBOARD;

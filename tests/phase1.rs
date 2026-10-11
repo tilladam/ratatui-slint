@@ -42,6 +42,7 @@ fn two_panes_render_side_by_side() {
 fn resize_reallocates_and_rerenders() {
     let mut rt = Runtime::new().unwrap();
     let mut pane = rt.create_pane(&halfblocks(), Still::new).unwrap();
+    pane.set_scale(ratatui_slint::Scale::Fixed(1.0)); // logical width == pixel width below
     pane.set_area(Rect::new(0, 0, 20, 5));
     assert_eq!(pane.pixel_size(), Some((200, 100)));
     assert!(rt.begin_frame());
@@ -177,33 +178,74 @@ fn widget_alone_lays_out_the_pane() {
     assert_eq!(painted_cells(term.backend().buffer(), area), 100);
 }
 
-/// Every frame of a kitty pane reuses one image id, so the terminal replaces the image instead of
-/// accumulating new ones.
+fn kitty_id_of_first_cell(term: &ratatui::Terminal<ratatui::backend::TestBackend>) -> String {
+    let first = term.backend().buffer()[(0, 0)].symbol().to_string();
+    first
+        .split("i=")
+        .nth(1)
+        .and_then(|s| s.split(',').next())
+        .map(str::to_owned)
+        .expect("first cell carries the kitty transmit sequence")
+}
+
+/// `KittyIds::Stable`: every frame re-transmits under one image id.
 #[test]
-fn kitty_frames_keep_one_image_id() {
+fn stable_kitty_ids_reuse_one_id() {
     let rt = Runtime::new().unwrap();
     let mut pane = rt.create_pane(&picker(ProtocolType::Kitty), Still::new).unwrap();
     pane.set_encode_mode(EncodeMode::Inline);
+    pane.set_kitty_ids(ratatui_slint::KittyIds::Stable);
     let area = Rect::new(0, 0, 8, 2);
     pane.set_area(area);
     let mut term = test_terminal(8, 2);
-
     let mut ids = Vec::new();
     for color in [(200, 0, 0), (0, 200, 0), (0, 0, 200)] {
         pane.component().set_fill(slint::Color::from_rgb_u8(color.0, color.1, color.2));
         assert!(pane.update());
         term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
-        let first = term.backend().buffer()[(0, 0)].symbol().to_string();
-        let id = first
-            .split("i=")
-            .nth(1)
-            .and_then(|s| s.split(',').next())
-            .map(str::to_owned)
-            .expect("first cell carries the kitty transmit sequence");
-        ids.push(id);
+        ids.push(kitty_id_of_first_cell(&term));
     }
-    assert_eq!(pane.frames(), 3);
     assert!(ids.windows(2).all(|w| w[0] == w[1]), "image ids changed between frames: {ids:?}");
+    let mut out = Vec::new();
+    rt.write_pending_output(&mut out).unwrap();
+    assert!(out.is_empty(), "stable ids never delete images mid-run");
+}
+
+/// `KittyIds::Fresh` (default): a new id per frame, and the replaced image is deleted only after
+/// the frame that replaces it has been drawn.
+#[test]
+fn fresh_kitty_ids_delete_the_replaced_image_after_drawing() {
+    let rt = Runtime::new().unwrap();
+    let mut pane = rt.create_pane(&picker(ProtocolType::Kitty), Still::new).unwrap();
+    pane.set_encode_mode(EncodeMode::Inline);
+    pane.set_kitty_ids(ratatui_slint::KittyIds::Fresh);
+    let area = Rect::new(0, 0, 8, 2);
+    pane.set_area(area);
+    let mut term = test_terminal(8, 2);
+
+    assert!(pane.update());
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    let first = kitty_id_of_first_cell(&term);
+    let mut out = Vec::new();
+    rt.write_pending_output(&mut out).unwrap();
+    assert!(out.is_empty(), "nothing to delete after the first frame");
+
+    pane.component().set_fill(slint::Color::from_rgb_u8(0, 0, 200));
+    assert!(pane.update());
+    rt.write_pending_output(&mut out).unwrap();
+    assert!(out.is_empty(), "the old image must stay until the new frame is drawn");
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    let second = kitty_id_of_first_cell(&term);
+    assert_ne!(first, second);
+    rt.write_pending_output(&mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert_eq!(out, format!("\x1b_Ga=d,d=I,i={first},q=2\x1b\\"));
+
+    // Dropping the pane deletes the image on display.
+    drop(pane);
+    let mut out = Vec::new();
+    rt.write_pending_output(&mut out).unwrap();
+    assert_eq!(String::from_utf8(out).unwrap(), format!("\x1b_Ga=d,d=I,i={second},q=2\x1b\\"));
 }
 
 #[test]

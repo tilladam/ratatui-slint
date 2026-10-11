@@ -135,3 +135,24 @@ mod transparency {
         );
     }
 }
+
+#[test]
+fn auto_scale_follows_the_cell_height() {
+    use ratatui_slint::AUTO_ROW_HEIGHT;
+    let rt = Runtime::new().unwrap();
+    let mut pane = rt.create_pane(&halfblocks(), Still::new).unwrap();
+    assert_eq!(pane.scale_factor(), 1.0, "nothing applied before layout");
+    pane.set_area(Rect::new(0, 0, 40, 10)); // 10 × 20 px cells: 400 × 200 px
+    assert_eq!(pane.scale_factor(), 20.0 / AUTO_ROW_HEIGHT);
+    assert_eq!(pane.component().get_logical_width(), 400.0 / (20.0 / AUTO_ROW_HEIGHT));
+
+    // A Retina-sized cell, as kitty reports it in device pixels: about 2×.
+    pane.set_font_size(ratatui_image::FontSize::new(16, 32));
+    assert_eq!(pane.scale_factor(), 2.0);
+    assert_eq!(pane.pixel_size(), Some((640, 320)));
+    assert_eq!(pane.component().get_logical_width(), 320.0);
+
+    // An explicit policy replaces Auto.
+    pane.set_scale(Scale::Fixed(1.0));
+    assert_eq!(pane.component().get_logical_width(), 640.0);
+}

@@ -16,13 +16,13 @@ slint::slint! {
     export component Hello inherits Window {
         in-out property <float> level: 0.3;
         background: #141820;
-        FocusScope {
+        // No TouchArea inside: it would take the click, and the FocusScope would never get focus.
+        fs := FocusScope {
             key-pressed(e) => {
                 if (e.text == "+") { root.level = Math.min(1, root.level + 0.1); return accept; }
                 if (e.text == "-") { root.level = Math.max(0, root.level - 0.1); return accept; }
                 reject
             }
-            TouchArea {}
         }
         Text { x: 16px; y: 12px; text: "Hello from Slint"; color: #e6edf3; font-size: 24px; }
         Rectangle {
@@ -30,6 +30,7 @@ slint::slint! {
             border-radius: 10px; background: #3fb950;
             animate width { duration: 250ms; easing: ease-out; }
         }
+        init => { fs.focus(); }
     }
 }
 
@@ -75,5 +76,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         rt.write_pending_output(session.terminal.backend_mut())?;
     }
+    drop(pane); // queues deletion of its kitty image
+    rt.write_pending_output(session.terminal.backend_mut())?;
     Ok(())
 }

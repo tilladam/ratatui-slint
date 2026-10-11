@@ -255,7 +255,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         })?;
         rt.write_pending_output(session.terminal.backend_mut())?;
     })();
-    drop(pane);
+    drop(pane); // queues deletion of its kitty image
+    rt.write_pending_output(session.terminal.backend_mut())?;
     session.restore()?;
     res
 }

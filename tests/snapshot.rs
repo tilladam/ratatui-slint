@@ -25,6 +25,7 @@ fn render_cells(buf: &ratatui::buffer::Buffer, area: Rect) -> String {
 fn still_component_halfblocks_snapshot() {
     let rt = Runtime::new().unwrap();
     let mut pane = rt.create_pane(&halfblocks(), Still::new).unwrap();
+    pane.set_scale(ratatui_slint::Scale::Fixed(1.0)); // the snapshot covers rendering, not scaling
     let area = Rect::new(0, 0, 8, 3);
     pane.set_area(area);
     assert!(pane.update());

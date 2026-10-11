@@ -59,8 +59,10 @@ Key points:
   the loop.
 - **Focus.** Clicking a pane focuses it. Slint keeps Tab and Escape for its own focus chain and
   popups, so Ctrl+G leaves a pane. Change it with `InputRouter::set_exit_key`.
-- **Scaling.** `Scale::Fixed(f)` maps one logical pixel to `f` terminal pixels.
-  `Scale::Fit { width, height }` fits a fixed-size design, such as a touch panel, into the pane.
+- **Scaling.** The default `Scale::Auto` sets the factor to cell height ÷ 16, so Slint text sizes
+  look like terminal text on 1× and Retina displays alike. `Scale::Fixed(f)` maps one logical
+  pixel to `f` terminal pixels. `Scale::Fit { width, height }` fits a fixed-size design, such as a
+  touch panel, into the pane. `RATATUI_SLINT_SCALE=auto|<number>` replaces the default.
 - **Encoding.** Sixel, kitty and iTerm2 encode on a worker thread by default, dropping frames it
   cannot keep up with. Half-blocks encode inline. See `SlintPane::set_encode_mode`.
 - **Protocol.** It is detected at startup. Override it with

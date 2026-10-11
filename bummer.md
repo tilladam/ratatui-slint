@@ -33,3 +33,15 @@ Next time: verified — check against the last screen reconstructed from cursor 
 Revisit when: never for diffing renderers.
 Cost: two test iterations.
 Scope: global-candidate     Status: active
+
+## 2026-10-11 · Stable kitty image id per pane looked frozen in a real kitty · #src/pane.rs #kitty
+Situation: ratatui-slint panes with ratatui-image 11.1 StatefulKitty, Unicode placeholders, one image id for the pane's lifetime, every frame re-transmitted under it (a=T, same i=).
+Tried: stable id to avoid accumulating images; verified only on ratatui's TestBackend and the fake terminal.
+Outcome: user ran `RATATUI_SLINT_PROTOCOL=kitty cargo run --example hello` in kitty, clicked, pressed `+`: "frozen".
+Evidence: 2026-10-11 user report. Not yet A/B-tested against the fresh-id path in the same terminal.
+Hypothesis: either kitty does not refresh a visible virtual placement when its image is replaced under the same id, or the `+` key never reached Slint (kitty keyboard protocol without REPORT_ALTERNATE_KEYS can report Shift+=). Unconfirmed which.
+Next time: suggestion — run sysmon (animates without keys) with RATATUI_SLINT_KITTY_IDS=stable vs fresh in the same kitty before choosing an id strategy. Do not trust TestBackend output for terminal-side image behaviour.
+Revisit when: the A/B run shows stable ids refresh correctly.
+Cost: one user round-trip; default switched to fresh ids plus delete-after-draw.
+Scope: project     Status: active
+Result 2026-10-11: user A/B in kitty with sysmon (no keys involved) — fresh ids work, stable ids flicker and draw incorrectly. Stable-id cause confirmed. The frozen `hello` had a second cause: an empty TouchArea inside the FocusScope took the click, so the FocusScope never got focus (reproduced headless, fixed). Lesson: an example that needs input to show change cannot test rendering; test rendering with something that animates by itself.
