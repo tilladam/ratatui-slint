@@ -4218,6 +4218,7 @@ dependencies = [
  "base64 0.22.1",
  "crossterm",
  "i-slint-core",
+ "icy_sixel",
  "image",
  "ratatui",
  "ratatui-image",

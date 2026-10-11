@@ -176,6 +176,9 @@ pub struct SlintPane<C: ComponentHandle> {
     /// Kitty id of the frame on display, and ids of replaced frames awaiting deletion.
     shown_kitty_id: Option<u32>,
     retired_kitty_ids: Vec<u32>,
+    /// A sixel pane on the terminal's last row leaves that row out of its image: the terminal
+    /// moves the cursor below a sixel image, which on the last row scrolls the whole screen.
+    sixel_skips_last_row: bool,
 }
 
 impl<C: ComponentHandle> SlintPane<C> {
@@ -211,6 +214,7 @@ impl<C: ComponentHandle> SlintPane<C> {
             kitty_ids: KittyIds::from_env().unwrap_or_default(),
             shown_kitty_id: None,
             retired_kitty_ids: Vec::new(),
+            sixel_skips_last_row: false,
         };
         pane.window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
         pane
@@ -383,16 +387,20 @@ impl<C: ComponentHandle> SlintPane<C> {
             // in the encoder (on its worker thread unless the mode is inline).
             let start = std::time::Instant::now();
             let (protocol_type, kitty_id) = self.frame_protocol_type();
+            // Leave out the last cell row when a sixel image would otherwise end on the
+            // terminal's last row.
+            let cut_rows = u16::from(self.sixel_skips_last_row && self.area.height > 1);
+            let height = h - u32::from(cut_rows) * u32::from(self.font.height);
             let frame = Frame {
-                pixels: self.pixels.clone(),
+                pixels: self.pixels[..w as usize * height as usize].to_vec(),
                 width: w,
-                height: h,
+                height,
                 keep_alpha: self.keeps_alpha(),
                 background: self.background,
                 font: self.font,
                 protocol_type,
             };
-            let size = Size::new(self.area.width, self.area.height);
+            let size = Size::new(self.area.width, self.area.height - cut_rows);
             self.stats.snapshot = start.elapsed();
             self.encoder.submit(Job { generation: self.generation, size, frame, kitty_id });
         }
@@ -440,7 +448,19 @@ impl<C: ComponentHandle> SlintPane<C> {
             // Laid out by the widget alone: adopt the area; the next frame renders at that size.
             self.set_area(area);
         }
+        // Only the widget sees the whole screen. A sixel image ending on its last row would scroll
+        // it, so such a pane drops that row: re-render shorter, and draw nothing until then.
+        let at_bottom = self.picker.protocol_type() == ProtocolType::Sixel && area.bottom() == buf.area.bottom();
+        if at_bottom != self.sixel_skips_last_row {
+            self.sixel_skips_last_row = at_bottom;
+            self.generation += 1;
+            self.window.request_redraw();
+            self.waker.wake();
+        }
         let Some((generation, protocol)) = &mut self.displayed else { return };
+        if at_bottom && protocol.cells().height >= area.height {
+            return;
+        }
         if *generation != self.generation {
             // Encoded for an older size; only draw it if it still fits.
             let size = protocol.cells();

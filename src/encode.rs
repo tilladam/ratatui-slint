@@ -84,8 +84,8 @@ impl Frame {
 pub(crate) enum Displayed {
     /// Encoded by ratatui-image.
     Stateful(StatefulProtocol),
-    /// iTerm2 inline image encoded here, sized in cells rather than ratatui-image's pixels.
-    Iterm2 { data: String, cells: Size },
+    /// An escape sequence encoded here (iTerm2 and sixel), drawn from the area's first cell.
+    Raw { data: String, cells: Size },
 }
 
 impl Displayed {
@@ -93,14 +93,14 @@ impl Displayed {
     pub fn cells(&self) -> Size {
         match self {
             Displayed::Stateful(p) => p.size_for(Resize::Fit(None), Size::new(u16::MAX, u16::MAX)),
-            Displayed::Iterm2 { cells, .. } => *cells,
+            Displayed::Raw { cells, .. } => *cells,
         }
     }
 
     pub fn render(&mut self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
         match self {
             Displayed::Stateful(p) => p.render(area, buf),
-            Displayed::Iterm2 { data, cells } => {
+            Displayed::Raw { data, cells } => {
                 use ratatui::buffer::CellDiffOption;
                 let w = cells.width.min(area.width);
                 let h = cells.height.min(area.height);
@@ -119,6 +119,23 @@ impl Displayed {
             }
         }
     }
+}
+
+/// The sixel sequence for `image`, which covers `cells`.
+///
+/// ratatui-image pads sixel images to whole cells. Sixel data comes in 6-pixel bands, so a cell
+/// height that is not a multiple of 6 makes the image reach a few pixels into the next row; on
+/// the terminal's last row that scrolls the screen. The image is therefore cut to whole bands.
+pub(crate) fn sixel_sequence(image: &DynamicImage, tmux: bool) -> Result<String, String> {
+    let rgba = image.to_rgba8();
+    let (w, h) = (rgba.width(), rgba.height() / 6 * 6);
+    if w == 0 || h == 0 {
+        return Err("pane too small for a sixel band".into());
+    }
+    let bytes = &rgba.as_raw()[..w as usize * h as usize * 4];
+    let seq = icy_sixel::sixel_encode(bytes, w as usize, h as usize, &icy_sixel::EncodeOptions::default())
+        .map_err(|e| format!("sixel encoding error: {e}"))?;
+    Ok(if tmux { format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b")) } else { seq })
 }
 
 /// The iTerm2 inline-image sequence for `image`, sized to `cells`.
@@ -162,8 +179,12 @@ fn encode(job: Job) -> Option<Done> {
     let image = job.frame.to_image()?;
     let (protocol, error) = match job.frame.protocol_type {
         StatefulProtocolType::ITerm2(iterm2) => match iterm2_sequence(&image, job.size, iterm2.is_tmux) {
-            Ok(data) => (Displayed::Iterm2 { data, cells: job.size }, None),
-            Err(e) => (Displayed::Iterm2 { data: String::new(), cells: job.size }, Some(e)),
+            Ok(data) => (Displayed::Raw { data, cells: job.size }, None),
+            Err(e) => (Displayed::Raw { data: String::new(), cells: job.size }, Some(e)),
+        },
+        StatefulProtocolType::Sixel(sixel) => match sixel_sequence(&image, sixel.is_tmux) {
+            Ok(data) => (Displayed::Raw { data, cells: job.size }, None),
+            Err(e) => (Displayed::Raw { data: String::new(), cells: job.size }, Some(e)),
         },
         protocol_type => {
             // No background: the image already fills the cell box exactly, and transparency is

@@ -83,7 +83,9 @@ fn every_protocol_encodes() {
         let _ = rt.begin_frame();
         assert!(pane.update(), "{protocol:?}");
         assert_eq!(pane.last_error(), None, "{protocol:?}");
-        let mut term = test_terminal(12, 3);
+        // One spare row: a sixel pane on the terminal's last row deliberately waits for a
+        // shorter frame (see sixel_pane_on_the_last_row_leaves_it_out).
+        let mut term = test_terminal(12, 4);
         term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
         assert!(painted_cells(term.backend().buffer(), area) > 0, "{protocol:?} drew nothing");
     }
@@ -183,4 +185,60 @@ fn iterm2_frames_are_sized_in_cells_and_cover_the_pane() {
             }
         }
     }
+}
+
+/// A sixel image ending on the terminal's last row makes the terminal scroll the whole screen
+/// (seen in WezTerm). Such a pane leaves that row out, and never draws a full-height sixel there.
+#[test]
+fn sixel_pane_on_the_last_row_leaves_it_out() {
+    let mut rt = Runtime::new().unwrap();
+    let mut pane = rt.create_pane(&picker(ProtocolType::Sixel), Still::new).unwrap();
+    pane.set_encode_mode(EncodeMode::Inline);
+    let area = Rect::new(0, 0, 12, 4); // the whole 12 × 4 terminal
+    pane.set_area(area);
+    let _ = rt.begin_frame();
+    assert!(pane.update());
+    assert_eq!(pane.displayed_cells(), Some(ratatui::layout::Size::new(12, 4)));
+    let mut term = test_terminal(12, 4);
+    let frame = term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    assert!(!frame.buffer[(0, 0)].symbol().contains("\x1bP"), "full-height sixel drawn on the last row");
+
+    assert!(pane.update());
+    assert_eq!(pane.displayed_cells(), Some(ratatui::layout::Size::new(12, 3)));
+    let frame = term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    assert!(frame.buffer[(0, 0)].symbol().contains("\x1bP"), "shortened sixel should be drawn");
+
+    // Away from the bottom the pane gets its full height back.
+    let mut tall = test_terminal(12, 6);
+    tall.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    assert!(pane.update());
+    assert_eq!(pane.displayed_cells(), Some(ratatui::layout::Size::new(12, 4)));
+}
+
+/// Sixel images are cut to whole 6-pixel bands so they never reach into the row below their pane.
+#[test]
+fn sixel_images_stay_within_their_rows() {
+    use ratatui_image::FontSize;
+    let rt = Runtime::new().unwrap();
+    #[allow(deprecated)]
+    let mut p = ratatui_image::picker::Picker::from_fontsize(FontSize::new(14, 32));
+    p.set_protocol_type(ProtocolType::Sixel);
+    let mut pane = rt.create_pane(&p, Still::new).unwrap();
+    pane.set_encode_mode(EncodeMode::Inline);
+    let area = Rect::new(0, 0, 10, 23); // 23 rows × 32 px = 736 px, not a multiple of 6
+    pane.set_area(area);
+    assert!(pane.update());
+    let mut term = test_terminal(10, 30);
+    let frame = term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    let seq = frame.buffer[(0, 0)].symbol().to_string();
+    // Raster attributes: "Pan;Pad;Ph;Pv right after the DCS q introducer.
+    let raster = seq.split('"').nth(1).expect("raster attributes");
+    let height: u32 = raster
+        .split(';')
+        .nth(3)
+        .map(|v| v.chars().take_while(char::is_ascii_digit).collect::<String>())
+        .and_then(|v| v.parse().ok())
+        .expect("image height");
+    assert_eq!(height % 6, 0, "raster {raster}");
+    assert!(height <= 736, "image of {height} px reaches below 23 rows of 32 px");
 }

@@ -28,6 +28,8 @@ crossterm = "0.29"
 ratatui-image = { version = "11.1", default-features = false, features = ["crossterm", "image-defaults"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
+# Sixel encoder, the same one ratatui-image uses; called directly to control image height.
+icy_sixel = "0.5"
 # Feature unification only; see the `image-decoders` feature. Caret requirement so it resolves to
 # the exact version `slint` pins.
 i-slint-core = { version = "1.18", optional = true, default-features = false, features = ["image-decoders", "svg"] }
