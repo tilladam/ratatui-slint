@@ -9,6 +9,10 @@ sixel, iTerm2 or half-block output. The ratatui loop drives Slint's timers, anim
 rendering, and Slint never runs its own event loop. Mouse and keyboard input goes to the pane
 under the pointer or in focus, and keys Slint rejects fall back to ratatui.
 
+[![Demo: sysmon, device_console and live-preview running in kitty](docs/demo-poster.jpg)](docs/demo.mp4)
+
+[Watch the 50-second demo](docs/demo.mp4), recorded in kitty on macOS.
+
 Status: pre-release. The headless tests pass, and every example passes scripted checks under a
 simulated terminal. The examples have been run by hand in kitty, Ghostty, WezTerm, iTerm2 and
 Terminal.app. tmux and SSH are untested. See [PLAN.md](PLAN.md) for the design, measurements
@@ -31,7 +35,7 @@ has focus. Each example's keys are listed at the top of its source file in `exam
 | Example | Shows |
 |---|---|
 | `hello` | The smallest complete app. Click the pane, then press `+`/`-`. |
-| `sysmon` | A ratatui process table beside Slint per-core gauges, a memory gauge and a CPU graph. `p` pauses sampling: the bytes/s counter drops to zero while idle. |
+| `sysmon` | A ratatui process table beside Slint per-core gauges, a memory gauge and a CPU graph. `p` pauses sampling: with nothing changing, nothing is redrawn and no bytes go to the terminal. |
 | `device_console` | An 800 × 480 touch-panel UI scaled into a pane with `Scale::Fit`, inside a ratatui console with logs and a config editor. |
 | `live-preview` | Recompiles a `.slint` file on save and swaps it in. Without a path it shows a bundled demo. `s` cycles the scale, `r` reloads. |
 | `termbench` | Runs an animated pane full screen for 5 seconds, then prints fps, per-frame costs and bytes written. |
