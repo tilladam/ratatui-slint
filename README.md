@@ -9,9 +9,7 @@ sixel, iTerm2 or half-block output. The ratatui loop drives Slint's timers, anim
 rendering, and Slint never runs its own event loop. Mouse and keyboard input goes to the pane
 under the pointer or in focus, and keys Slint rejects fall back to ratatui.
 
-[![Demo: sysmon, device_console and live-preview running in kitty](docs/demo-poster.jpg)](docs/demo.mp4)
-
-[Watch the 50-second demo](docs/demo.mp4), recorded in kitty on macOS.
+https://github.com/user-attachments/assets/8172ce62-0ec5-464e-a368-481e82aad6dc
 
 Status: pre-release. The headless tests pass, and every example passes scripted checks under a
 simulated terminal. The examples have been run by hand in kitty, Ghostty, WezTerm, iTerm2 and
