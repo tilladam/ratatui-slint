@@ -35,7 +35,10 @@ slint::slint! {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let panic_after = std::env::var("RATATUI_SLINT_PANIC_AFTER_MS").ok().and_then(|v| v.parse().ok()).map(Duration::from_millis);
+    let panic_after = std::env::var("RATATUI_SLINT_PANIC_AFTER_MS")
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .map(Duration::from_millis);
     let mut rt = Runtime::new()?;
     let mut session = TerminalSession::init(TerminalOptions::default())?;
     rt.spawn_terminal_reader(); // after the terminal queries, which read stdin
@@ -52,7 +55,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             LoopEvent::Quit => break,
             LoopEvent::Terminal(ev) => {
                 if let Event::Resize(..) = ev
-                    && pane.protocol_type() != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
+                    && pane.protocol_type()
+                        != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
                     && let Some(font) = ratatui_slint::terminal::cell_size()
                 {
                     pane.set_font_size(font); // font zoom changes pixels per cell
@@ -71,7 +75,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let area = Rect::from(session.terminal.size()?);
             pane.set_area(area);
             if pane.update() {
-                session.terminal.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
+                session
+                    .terminal
+                    .draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
             }
         }
         rt.write_pending_output(session.terminal.backend_mut())?;

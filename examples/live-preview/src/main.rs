@@ -10,6 +10,7 @@
 //! Keys (when the preview is not focused): `r` reloads, `s` cycles the scale (1×, 2×, fit to
 //! 800 × 480), `q` quits. Click the preview to interact with it; Ctrl+G leaves it.
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
 use std::task::{Context, Poll, Waker};
@@ -21,7 +22,9 @@ use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Borders, Paragraph, Wrap};
 use ratatui_slint::terminal::{TerminalOptions, TerminalSession};
-use ratatui_slint::{InputRouter, LoopEvent, PaneInput, Routed, Runtime, Scale, SlintPane, SlintWidget};
+use ratatui_slint::{
+    InputRouter, LoopEvent, PaneInput, Routed, Runtime, Scale, SlintPane, SlintWidget,
+};
 use slint_interpreter::{ComponentDefinition, ComponentInstance, DiagnosticLevel};
 
 /// The interpreter's compile future does no real I/O waiting; poll it to completion.
@@ -50,30 +53,47 @@ fn compile(path: &Path, component: Option<&str>) -> Build {
         .diagnostics()
         .map(|d| {
             let (line, col) = d.line_column();
-            let file = d.source_file().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+            let file = d
+                .source_file()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default();
             (d.level(), format!("{file}:{line}:{col}: {}", d.message()))
         })
         .collect();
     let definition = match component {
         Some(name) => result.component(name),
-        None => result.component_names().last().and_then(|n| result.component(n)),
+        None => result
+            .component_names()
+            .last()
+            .and_then(|n| result.component(n)),
     };
-    Build { definition, diagnostics, took: start.elapsed() }
+    Build {
+        definition,
+        diagnostics,
+        took: start.elapsed(),
+    }
 }
 
-/// Newest modification time of the watched `.slint` files.
-fn newest_mtime(dir: &Path, file: &Path) -> Option<SystemTime> {
-    let mut newest = std::fs::metadata(file).and_then(|m| m.modified()).ok();
+/// Per-file state, so a newer sibling cannot mask edits, additions or deletions.
+fn watched_files(dir: &Path, file: &Path) -> BTreeMap<PathBuf, (Option<SystemTime>, u64)> {
+    let mut paths = vec![file.to_path_buf()];
     if let Ok(entries) = std::fs::read_dir(dir) {
         for e in entries.flatten() {
-            if e.path().extension().is_some_and(|x| x == "slint")
-                && let Ok(t) = e.metadata().and_then(|m| m.modified())
-            {
-                newest = newest.max(Some(t));
+            if e.path().extension().is_some_and(|x| x == "slint") {
+                paths.push(e.path());
             }
         }
     }
-    newest
+    paths
+        .into_iter()
+        .filter_map(|path| {
+            let metadata = std::fs::metadata(&path).ok()?;
+            metadata
+                .is_file()
+                .then(|| (path, (metadata.modified().ok(), metadata.len())))
+        })
+        .collect()
 }
 
 /// Instantiates the built component in a new pane, replacing the old one. Returns an error text.
@@ -102,7 +122,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(PathBuf::from)
         .unwrap_or_else(|| Path::new(env!("CARGO_MANIFEST_DIR")).join("demo.slint"));
     let component_name = args.next();
-    let path = path.canonicalize().map_err(|e| format!("{}: {e}", path.display()))?;
+    let path = path
+        .canonicalize()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
     let dir = path.parent().unwrap_or(Path::new(".")).to_path_buf();
 
     let mut rt = Runtime::new()?;
@@ -118,10 +140,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let waker = rt.waker();
         let (dir, path) = (dir.clone(), path.clone());
         std::thread::spawn(move || {
-            let mut last = newest_mtime(&dir, &path);
+            let mut last = watched_files(&dir, &path);
             loop {
                 std::thread::sleep(Duration::from_millis(300));
-                let now = newest_mtime(&dir, &path);
+                let now = watched_files(&dir, &path);
                 if now != last {
                     last = now;
                     if tx.send(()).is_err() || !waker.wake() {
@@ -132,7 +154,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
-    let scales = [Scale::Fixed(1.0), Scale::Fixed(2.0), Scale::Fit { width: 800.0, height: 480.0 }];
+    let scales = [
+        Scale::Fixed(1.0),
+        Scale::Fixed(2.0),
+        Scale::Fit {
+            width: 800.0,
+            height: 480.0,
+        },
+    ];
     let mut scale_index = 0;
     let mut pane: Option<SlintPane<ComponentInstance>> = None;
     let mut build = compile(&path, component_name.as_deref());
@@ -150,7 +179,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             LoopEvent::Terminal(ev) => {
                 dirty = true;
                 if let Event::Resize(..) = ev
-                    && picker.protocol_type() != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
+                    && picker.protocol_type()
+                        != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
                     && let Some(font) = ratatui_slint::terminal::cell_size()
                     && let Some(p) = pane.as_mut()
                 {
@@ -194,11 +224,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let size = session.terminal.size()?;
-        let [main, status] = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(Rect::from(size));
-        let [left, right] = Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)]).areas(main);
+        let [main, status] =
+            Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(Rect::from(size));
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(65), Constraint::Percentage(35)])
+                .areas(main);
         let block = Block::default().borders(Borders::ALL).title(format!(
             " {} ",
-            shown.as_ref().map(|d| d.name().to_string()).unwrap_or_else(|| "no component".into())
+            shown
+                .as_ref()
+                .map(|d| d.name().to_string())
+                .unwrap_or_else(|| "no component".into())
         ));
         let inner = block.inner(left);
         let mut changed = false;
@@ -206,52 +242,91 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             p.set_area(inner);
             changed = p.update();
         }
-        if !(changed || std::mem::take(&mut dirty)) {
+        let host_changed = std::mem::take(&mut dirty);
+        if !(changed || host_changed) {
             continue;
         }
 
         let mut info: Vec<Line> = vec![
-            Line::from(vec![Span::styled("file  ", Style::default().fg(Color::Gray)), Span::raw(path.display().to_string())]),
+            Line::from(vec![
+                Span::styled("file  ", Style::default().fg(Color::Gray)),
+                Span::raw(path.display().to_string()),
+            ]),
             Line::from(vec![
                 Span::styled("build ", Style::default().fg(Color::Gray)),
-                Span::raw(format!("{:.0} ms, reload #{reloads}", build.took.as_secs_f64() * 1e3)),
+                Span::raw(format!(
+                    "{:.0} ms, reload #{reloads}",
+                    build.took.as_secs_f64() * 1e3
+                )),
             ]),
-            Line::from(vec![Span::styled("scale ", Style::default().fg(Color::Gray)), Span::raw(format!("{:?}", scales[scale_index]))]),
+            Line::from(vec![
+                Span::styled("scale ", Style::default().fg(Color::Gray)),
+                Span::raw(format!("{:?}", scales[scale_index])),
+            ]),
             Line::from(""),
         ];
         if let Some(e) = &load_error {
             info.push(Line::styled(e.clone(), Style::default().fg(Color::Red)));
         }
         if build.diagnostics.is_empty() {
-            info.push(Line::styled("no diagnostics", Style::default().fg(Color::Green)));
+            info.push(Line::styled(
+                "no diagnostics",
+                Style::default().fg(Color::Green),
+            ));
         }
         for (level, msg) in &build.diagnostics {
-            let color = if *level == DiagnosticLevel::Error { Color::Red } else { Color::Yellow };
+            let color = if *level == DiagnosticLevel::Error {
+                Color::Red
+            } else {
+                Color::Yellow
+            };
             info.push(Line::styled(msg.clone(), Style::default().fg(color)));
         }
         if build.definition.is_none() && shown.is_some() {
-            info.push(Line::styled("build failed: showing the last good UI", Style::default().fg(Color::Yellow)));
+            info.push(Line::styled(
+                "build failed: showing the last good UI",
+                Style::default().fg(Color::Yellow),
+            ));
         }
         if let (Some(def), Some(p)) = (&shown, &pane) {
             info.push(Line::from(""));
-            info.push(Line::styled("properties", Style::default().add_modifier(Modifier::BOLD)));
+            info.push(Line::styled(
+                "properties",
+                Style::default().add_modifier(Modifier::BOLD),
+            ));
             for (name, _) in def.properties() {
-                let value = p.component().get_property(&name).map(|v| format!("{v:?}")).unwrap_or_default();
+                let value = p
+                    .component()
+                    .get_property(&name)
+                    .map(|v| format!("{v:?}"))
+                    .unwrap_or_default();
                 info.push(Line::from(format!("{name} = {value}")));
             }
         }
-        let focus = if router.focused().is_some() { "preview focused (Ctrl+G leaves)" } else { "click preview to use it" };
-        let status_line = format!(" {:?} | {focus} | r reload, s scale, q quit", picker.protocol_type());
+        let focus = if router.focused().is_some() {
+            "preview focused (Ctrl+G leaves)"
+        } else {
+            "click preview to use it"
+        };
+        let status_line = format!(
+            " {:?} | {focus} | r reload, s scale, q quit",
+            picker.protocol_type()
+        );
         session.terminal.draw(|f| {
             f.render_widget(block, left);
             if let Some(p) = pane.as_mut() {
                 f.render_stateful_widget(SlintWidget, inner, p);
             }
             f.render_widget(
-                Paragraph::new(info).wrap(Wrap { trim: false }).block(Block::default().borders(Borders::ALL).title(" Build ")),
+                Paragraph::new(info)
+                    .wrap(Wrap { trim: false })
+                    .block(Block::default().borders(Borders::ALL).title(" Build ")),
                 right,
             );
-            f.render_widget(Paragraph::new(status_line).style(Style::default().fg(Color::Gray)), status);
+            f.render_widget(
+                Paragraph::new(status_line).style(Style::default().fg(Color::Gray)),
+                status,
+            );
         })?;
         rt.write_pending_output(session.terminal.backend_mut())?;
     })();
@@ -259,4 +334,71 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     rt.write_pending_output(session.terminal.backend_mut())?;
     session.restore()?;
     res
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::fs::{File, FileTimes};
+
+    struct TestDir(PathBuf);
+
+    impl Drop for TestDir {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn stamp(path: &Path, seconds: u64) {
+        File::options()
+            .write(true)
+            .open(path)
+            .unwrap()
+            .set_times(
+                FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
+            )
+            .unwrap();
+    }
+
+    #[test]
+    fn watcher_detects_changes_even_below_the_latest_timestamp() {
+        let dir = TestDir(std::env::temp_dir().join(format!(
+            "ratatui-slint-watch-{}-{}", std::process::id(),
+            SystemTime::now().duration_since(SystemTime::UNIX_EPOCH).unwrap().as_nanos()
+        )));
+        std::fs::create_dir(&dir.0).unwrap();
+        let main = dir.0.join("ui.slint");
+        let sibling = dir.0.join("other.slint");
+        std::fs::write(&main, "old").unwrap();
+        std::fs::write(&sibling, "newest").unwrap();
+        stamp(&main, 1000);
+        stamp(&sibling, 2000);
+        let before = watched_files(&dir.0, &main);
+
+        std::fs::write(&main, "new").unwrap();
+        stamp(&main, 1500);
+        let edited = watched_files(&dir.0, &main);
+        assert_ne!(before, edited, "newer sibling masked the edit");
+        assert_eq!(before.get(&sibling), edited.get(&sibling));
+
+        let added = dir.0.join("added.slint");
+        std::fs::write(&added, "added").unwrap();
+        stamp(&added, 500);
+        assert_ne!(
+            edited,
+            watched_files(&dir.0, &main),
+            "older file addition missed"
+        );
+        std::fs::remove_file(&added).unwrap();
+        assert_eq!(edited, watched_files(&dir.0, &main));
+        std::fs::write(dir.0.join("ignored.txt"), "ignored").unwrap();
+        assert_eq!(edited, watched_files(&dir.0, &main));
+        std::fs::remove_file(&main).unwrap();
+        assert_ne!(
+            edited,
+            watched_files(&dir.0, &main),
+            "main file deletion missed"
+        );
+    }
 }

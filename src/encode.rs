@@ -10,7 +10,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use image::DynamicImage;
 use ratatui::layout::Size;
 use ratatui_image::protocol::StatefulProtocol;
-use ratatui_image::{ResizeEncodeRender, Resize};
+use ratatui_image::{Resize, ResizeEncodeRender};
 
 use crate::platform::Waker;
 
@@ -63,7 +63,13 @@ impl Frame {
         for p in &self.pixels {
             if self.keep_alpha {
                 // Slint renders premultiplied alpha; image encoders expect straight alpha.
-                let un = |c: u8| if p.alpha == 0 { 0 } else { ((c as u32 * 255) / p.alpha as u32).min(255) as u8 };
+                let un = |c: u8| {
+                    if p.alpha == 0 {
+                        0
+                    } else {
+                        ((c as u32 * 255) / p.alpha as u32).min(255) as u8
+                    }
+                };
                 out.extend_from_slice(&[un(p.red), un(p.green), un(p.blue), p.alpha]);
             } else {
                 // Composite the premultiplied colour over the background.
@@ -106,10 +112,14 @@ impl Displayed {
                 let h = cells.height.min(area.height);
                 for y in area.y..area.y + h {
                     for x in area.x..area.x + w {
-                        let Some(cell) = buf.cell_mut((x, y)) else { continue };
+                        let Some(cell) = buf.cell_mut((x, y)) else {
+                            continue;
+                        };
                         if (x, y) == (area.x, area.y) {
                             cell.set_symbol(data)
-                                .set_diff_option(CellDiffOption::ForcedWidth(std::num::NonZeroU16::MIN));
+                                .set_diff_option(CellDiffOption::ForcedWidth(
+                                    std::num::NonZeroU16::MIN,
+                                ));
                         } else {
                             // The image covers these cells; ratatui must not write over it.
                             cell.set_diff_option(CellDiffOption::Skip);
@@ -133,9 +143,18 @@ pub(crate) fn sixel_sequence(image: &DynamicImage, tmux: bool) -> Result<String,
         return Err("pane too small for a sixel band".into());
     }
     let bytes = &rgba.as_raw()[..w as usize * h as usize * 4];
-    let seq = icy_sixel::sixel_encode(bytes, w as usize, h as usize, &icy_sixel::EncodeOptions::default())
-        .map_err(|e| format!("sixel encoding error: {e}"))?;
-    Ok(if tmux { format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b")) } else { seq })
+    let seq = icy_sixel::sixel_encode(
+        bytes,
+        w as usize,
+        h as usize,
+        &icy_sixel::EncodeOptions::default(),
+    )
+    .map_err(|e| format!("sixel encoding error: {e}"))?;
+    Ok(if tmux {
+        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
+    } else {
+        seq
+    })
 }
 
 /// The iTerm2 inline-image sequence for `image`, sized to `cells`.
@@ -143,10 +162,16 @@ pub(crate) fn sixel_sequence(image: &DynamicImage, tmux: bool) -> Result<String,
 /// ratatui-image sizes iTerm2 images in pixels from the image dimensions. iTerm2 reports cell
 /// sizes in device pixels, and on a Retina display the image did not appear. Cell units fill the
 /// pane exactly, whatever iTerm2 takes a pixel to be.
-pub(crate) fn iterm2_sequence(image: &DynamicImage, cells: Size, tmux: bool) -> Result<String, String> {
+pub(crate) fn iterm2_sequence(
+    image: &DynamicImage,
+    cells: Size,
+    tmux: bool,
+) -> Result<String, String> {
     use base64::Engine;
     let mut png = Vec::new();
-    image.write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png).map_err(|e| e.to_string())?;
+    image
+        .write_to(&mut std::io::Cursor::new(&mut png), image::ImageFormat::Png)
+        .map_err(|e| e.to_string())?;
     let payload = base64::engine::general_purpose::STANDARD.encode(&png);
     let seq = format!(
         "\x1b]1337;File=inline=1;size={};width={};height={};preserveAspectRatio=0;doNotMoveCursor=1:{payload}\x07",
@@ -154,7 +179,11 @@ pub(crate) fn iterm2_sequence(image: &DynamicImage, cells: Size, tmux: bool) -> 
         cells.width,
         cells.height,
     );
-    Ok(if tmux { format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b")) } else { seq })
+    Ok(if tmux {
+        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
+    } else {
+        seq
+    })
 }
 
 pub(crate) struct Job {
@@ -178,13 +207,39 @@ fn encode(job: Job) -> Option<Done> {
     let start = std::time::Instant::now();
     let image = job.frame.to_image()?;
     let (protocol, error) = match job.frame.protocol_type {
-        StatefulProtocolType::ITerm2(iterm2) => match iterm2_sequence(&image, job.size, iterm2.is_tmux) {
-            Ok(data) => (Displayed::Raw { data, cells: job.size }, None),
-            Err(e) => (Displayed::Raw { data: String::new(), cells: job.size }, Some(e)),
-        },
+        StatefulProtocolType::ITerm2(iterm2) => {
+            match iterm2_sequence(&image, job.size, iterm2.is_tmux) {
+                Ok(data) => (
+                    Displayed::Raw {
+                        data,
+                        cells: job.size,
+                    },
+                    None,
+                ),
+                Err(e) => (
+                    Displayed::Raw {
+                        data: String::new(),
+                        cells: job.size,
+                    },
+                    Some(e),
+                ),
+            }
+        }
         StatefulProtocolType::Sixel(sixel) => match sixel_sequence(&image, sixel.is_tmux) {
-            Ok(data) => (Displayed::Raw { data, cells: job.size }, None),
-            Err(e) => (Displayed::Raw { data: String::new(), cells: job.size }, Some(e)),
+            Ok(data) => (
+                Displayed::Raw {
+                    data,
+                    cells: job.size,
+                },
+                None,
+            ),
+            Err(e) => (
+                Displayed::Raw {
+                    data: String::new(),
+                    cells: job.size,
+                },
+                Some(e),
+            ),
         },
         protocol_type => {
             // No background: the image already fills the cell box exactly, and transparency is
@@ -192,11 +247,20 @@ fn encode(job: Job) -> Option<Done> {
             let mut protocol = StatefulProtocol::new(image, job.frame.font, None, protocol_type);
             // The image already matches the cell box, so Fit only downsamples for half-blocks.
             protocol.resize_encode(&Resize::Fit(None), job.size);
-            let error = protocol.last_encoding_result().and_then(|r| r.err()).map(|e| e.to_string());
+            let error = protocol
+                .last_encoding_result()
+                .and_then(|r| r.err())
+                .map(|e| e.to_string());
             (Displayed::Stateful(protocol), error)
         }
     };
-    Some(Done { generation: job.generation, protocol, error, elapsed: start.elapsed(), kitty_id: job.kitty_id })
+    Some(Done {
+        generation: job.generation,
+        protocol,
+        error,
+        elapsed: start.elapsed(),
+        kitty_id: job.kitty_id,
+    })
 }
 
 pub(crate) struct Slot {
@@ -205,8 +269,13 @@ pub(crate) struct Slot {
 }
 
 pub(crate) enum Encoder {
-    Inline { done: Option<Box<Done>> },
-    Threaded { slot: Arc<(Mutex<Slot>, Condvar)>, rx: Receiver<Done> },
+    Inline {
+        done: Option<Box<Done>>,
+    },
+    Threaded {
+        slot: Arc<(Mutex<Slot>, Condvar)>,
+        rx: Receiver<Done>,
+    },
 }
 
 impl Encoder {
@@ -214,7 +283,13 @@ impl Encoder {
         if !threaded {
             return Encoder::Inline { done: None };
         }
-        let slot = Arc::new((Mutex::new(Slot { job: None, stop: false }), Condvar::new()));
+        let slot = Arc::new((
+            Mutex::new(Slot {
+                job: None,
+                stop: false,
+            }),
+            Condvar::new(),
+        ));
         let (tx, rx): (Sender<Done>, Receiver<Done>) = mpsc::channel();
         let worker_slot = slot.clone();
         std::thread::Builder::new()
@@ -258,7 +333,10 @@ impl Encoder {
     /// The newest finished frame for `generation`, if any. Older generations are discarded.
     pub fn take_latest(&mut self, generation: u64) -> Option<Done> {
         match self {
-            Encoder::Inline { done } => done.take().filter(|d| d.generation == generation).map(|d| *d),
+            Encoder::Inline { done } => done
+                .take()
+                .filter(|d| d.generation == generation)
+                .map(|d| *d),
             Encoder::Threaded { rx, .. } => {
                 rx.try_iter().filter(|d| d.generation == generation).last()
             }

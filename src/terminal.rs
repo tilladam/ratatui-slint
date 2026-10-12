@@ -140,8 +140,12 @@ impl TerminalSession {
             ..QueryStdioOptions::default()
         };
         // Without an answer the cell size is unknown; half-blocks at 10 × 20 px still work.
-        let mut picker = Picker::from_query_stdio_with_options(query).unwrap_or_else(|_| Picker::halfblocks());
-        let forced = std::env::var("RATATUI_SLINT_PROTOCOL").ok().and_then(|v| parse_protocol(&v)).or(options.protocol);
+        let mut picker =
+            Picker::from_query_stdio_with_options(query).unwrap_or_else(|_| Picker::halfblocks());
+        let forced = std::env::var("RATATUI_SLINT_PROTOCOL")
+            .ok()
+            .and_then(|v| parse_protocol(&v))
+            .or(options.protocol);
         if let Some(p) = forced {
             picker.set_protocol_type(p);
         } else if picker.protocol_type() == ProtocolType::Kitty && is_iterm2() {
@@ -151,40 +155,20 @@ impl TerminalSession {
             picker.set_protocol_type(ProtocolType::Iterm2);
         }
 
-        let mut enabled = 0;
-        if options.mouse {
-            crossterm::execute!(out, EnableMouseCapture)?;
-            enabled |= MOUSE;
-        }
-        if options.bracketed_paste {
-            crossterm::execute!(out, EnableBracketedPaste)?;
-            enabled |= PASTE;
-        }
-        if options.focus_change {
-            crossterm::execute!(out, EnableFocusChange)?;
-            enabled |= FOCUS;
-        }
         let keyboard_enhanced = options.keyboard_enhancement
             && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-        if keyboard_enhanced {
-            crossterm::execute!(
-                out,
-                PushKeyboardEnhancementFlags(
-                    KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
-                        | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
-                        // Without this, crossterm can report Shift+= instead of '+'.
-                        | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
-                )
-            )?;
-            enabled |= KEYBOARD;
-        }
-        ENABLED.store(enabled, Ordering::SeqCst);
+        enable_input_modes(&mut out, &options, keyboard_enhanced, &ENABLED)?;
 
         let writer = CountingWriter::new(io::stdout());
         let bytes = writer.counter();
         let mut terminal = Terminal::new(CrosstermBackend::new(writer))?;
         terminal.clear()?;
-        Ok(Self { terminal, picker, keyboard_enhanced, bytes })
+        Ok(Self {
+            terminal,
+            picker,
+            keyboard_enhanced,
+            bytes,
+        })
     }
 
     /// Restores the terminal. Safe to call more than once.
@@ -207,21 +191,65 @@ pub fn restore_terminal() -> io::Result<()> {
     }
     let enabled = ENABLED.swap(0, Ordering::SeqCst);
     let mut out = io::stdout();
+    // Always try to leave raw mode, even when writing the restore sequences fails.
+    restore_input_modes(&mut out, enabled).and(crossterm::terminal::disable_raw_mode())
+}
+
+fn enable_input_modes(
+    out: &mut impl Write,
+    options: &TerminalOptions,
+    keyboard_enhanced: bool,
+    enabled: &AtomicU8,
+) -> io::Result<()> {
+    // Register each attempted mode before writing: execute! can fail on flush after its
+    // commands reached the terminal, or after only some mouse modes were written.
+    if options.mouse {
+        enabled.fetch_or(MOUSE, Ordering::SeqCst);
+        crossterm::execute!(out, EnableMouseCapture)?;
+    }
+    if options.bracketed_paste {
+        enabled.fetch_or(PASTE, Ordering::SeqCst);
+        crossterm::execute!(out, EnableBracketedPaste)?;
+    }
+    if options.focus_change {
+        enabled.fetch_or(FOCUS, Ordering::SeqCst);
+        crossterm::execute!(out, EnableFocusChange)?;
+    }
+    if keyboard_enhanced {
+        enabled.fetch_or(KEYBOARD, Ordering::SeqCst);
+        crossterm::execute!(
+            out,
+            PushKeyboardEnhancementFlags(
+                KeyboardEnhancementFlags::DISAMBIGUATE_ESCAPE_CODES
+                | KeyboardEnhancementFlags::REPORT_EVENT_TYPES
+                // Without this, crossterm can report Shift+= instead of '+'.
+                | KeyboardEnhancementFlags::REPORT_ALTERNATE_KEYS
+            )
+        )?;
+    }
+    Ok(())
+}
+
+fn restore_input_modes(out: &mut impl Write, enabled: u8) -> io::Result<()> {
+    let mut result = Ok(());
     if enabled & KEYBOARD != 0 {
-        let _ = crossterm::execute!(out, PopKeyboardEnhancementFlags);
+        result = result.and(crossterm::execute!(out, PopKeyboardEnhancementFlags));
     }
     if enabled & FOCUS != 0 {
-        let _ = crossterm::execute!(out, DisableFocusChange);
+        result = result.and(crossterm::execute!(out, DisableFocusChange));
     }
     if enabled & PASTE != 0 {
-        let _ = crossterm::execute!(out, DisableBracketedPaste);
+        result = result.and(crossterm::execute!(out, DisableBracketedPaste));
     }
     if enabled & MOUSE != 0 {
-        let _ = crossterm::execute!(out, DisableMouseCapture);
+        result = result.and(crossterm::execute!(out, DisableMouseCapture));
     }
-    let _ = crossterm::execute!(out, LeaveAlternateScreen, crossterm::cursor::Show);
-    let _ = out.flush();
-    crossterm::terminal::disable_raw_mode()
+    result = result.and(crossterm::execute!(
+        out,
+        LeaveAlternateScreen,
+        crossterm::cursor::Show
+    ));
+    result.and(out.flush())
 }
 
 fn install_panic_hook() {
@@ -232,4 +260,76 @@ fn install_panic_hook() {
             previous(info);
         }));
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct FailingFlush {
+        bytes: Vec<u8>,
+        flushes: usize,
+        fail_on: usize,
+    }
+
+    impl Write for FailingFlush {
+        fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+            self.bytes.extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            self.flushes += 1;
+            if self.flushes == self.fail_on {
+                Err(io::Error::other("flush failed after commands were written"))
+            } else {
+                Ok(())
+            }
+        }
+    }
+
+    #[test]
+    fn partial_setup_restores_every_attempted_input_mode() {
+        for fail_on in 1..=4 {
+            let enabled = AtomicU8::new(0);
+            let mut out = FailingFlush {
+                bytes: Vec::new(),
+                flushes: 0,
+                fail_on,
+            };
+            assert!(
+                enable_input_modes(&mut out, &TerminalOptions::default(), true, &enabled).is_err()
+            );
+            let start = out.bytes.len();
+            restore_input_modes(&mut out, enabled.load(Ordering::SeqCst)).unwrap();
+            let restored = String::from_utf8(out.bytes[start..].to_vec()).unwrap();
+            assert!(restored.contains("\x1b[?1000l"));
+            assert_eq!(restored.contains("\x1b[?2004l"), fail_on >= 2);
+            assert_eq!(restored.contains("\x1b[?1004l"), fail_on >= 3);
+            assert_eq!(restored.contains("\x1b[<1u"), fail_on >= 4);
+            assert!(restored.contains("\x1b[?1049l"));
+        }
+    }
+
+    #[test]
+    fn restore_attempts_remaining_modes_after_an_output_failure() {
+        let mut out = FailingFlush {
+            bytes: Vec::new(),
+            flushes: 0,
+            fail_on: 1,
+        };
+        assert!(restore_input_modes(&mut out, MOUSE | PASTE | FOCUS | KEYBOARD).is_err());
+        let restored = String::from_utf8(out.bytes).unwrap();
+        for command in [
+            "\x1b[<1u",
+            "\x1b[?1004l",
+            "\x1b[?2004l",
+            "\x1b[?1000l",
+            "\x1b[?1049l",
+        ] {
+            assert!(
+                restored.contains(command),
+                "missing restore command {command:?}"
+            );
+        }
+    }
 }

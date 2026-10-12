@@ -54,7 +54,7 @@ pub enum LoopEvent {
     Wake,
     /// A Slint timer is due or the next animation frame is due.
     Timeout,
-    /// `slint::quit_event_loop()` was called, or every sender is gone.
+    /// `slint::quit_event_loop()` was called, the terminal reader failed, or every sender is gone.
     Quit,
 }
 
@@ -74,7 +74,9 @@ impl Shared {
     }
 
     pub(crate) fn find_window(&self, window: &slint::Window) -> Option<Rc<MinimalSoftwareWindow>> {
-        self.live_windows().into_iter().find(|w| std::ptr::eq(w.window(), window))
+        self.live_windows()
+            .into_iter()
+            .find(|w| std::ptr::eq(w.window(), window))
     }
 }
 
@@ -112,11 +114,18 @@ struct Proxy {
 
 impl EventLoopProxy for Proxy {
     fn quit_event_loop(&self) -> Result<(), EventLoopError> {
-        self.tx.send(Msg::Quit).map_err(|_| EventLoopError::EventLoopTerminated)
+        self.tx
+            .send(Msg::Quit)
+            .map_err(|_| EventLoopError::EventLoopTerminated)
     }
 
-    fn invoke_from_event_loop(&self, event: Box<dyn FnOnce() + Send>) -> Result<(), EventLoopError> {
-        self.tx.send(Msg::Invoke(event)).map_err(|_| EventLoopError::EventLoopTerminated)
+    fn invoke_from_event_loop(
+        &self,
+        event: Box<dyn FnOnce() + Send>,
+    ) -> Result<(), EventLoopError> {
+        self.tx
+            .send(Msg::Invoke(event))
+            .map_err(|_| EventLoopError::EventLoopTerminated)
     }
 }
 
@@ -128,12 +137,17 @@ struct TermPlatform {
 impl Platform for TermPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         let window = MinimalSoftwareWindow::new(RepaintBufferType::ReusedBuffer);
-        self.shared.windows.borrow_mut().push(Rc::downgrade(&window));
+        self.shared
+            .windows
+            .borrow_mut()
+            .push(Rc::downgrade(&window));
         Ok(window)
     }
 
     fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
-        self.proxy_tx.clone().map(|tx| Box::new(Proxy { tx }) as Box<dyn EventLoopProxy>)
+        self.proxy_tx
+            .clone()
+            .map(|tx| Box::new(Proxy { tx }) as Box<dyn EventLoopProxy>)
     }
 
     fn set_clipboard_text(&self, text: &str, clipboard: Clipboard) {
@@ -143,9 +157,14 @@ impl Platform for TermPlatform {
                 // OSC 52 copy. Queued, never written from inside a Slint dispatch: the host
                 // writes it between frames through the same writer as the terminal output.
                 let seq = crate::output::osc52(text);
-                self.shared.pending_output.borrow_mut().extend_from_slice(seq.as_bytes());
+                self.shared
+                    .pending_output
+                    .borrow_mut()
+                    .extend_from_slice(seq.as_bytes());
             }
-            Clipboard::SelectionClipboard => *self.shared.selection.borrow_mut() = Some(text.to_owned()),
+            Clipboard::SelectionClipboard => {
+                *self.shared.selection.borrow_mut() = Some(text.to_owned())
+            }
             _ => {}
         }
     }
@@ -187,7 +206,10 @@ impl Runtime {
             pending_output: RefCell::default(),
         });
         let owns_proxy = !PROXY_CLAIMED.swap(true, Ordering::SeqCst);
-        let platform = TermPlatform { shared: shared.clone(), proxy_tx: owns_proxy.then(|| tx.clone()) };
+        let platform = TermPlatform {
+            shared: shared.clone(),
+            proxy_tx: owns_proxy.then(|| tx.clone()),
+        };
         if let Err(e) = slint::platform::set_platform(Box::new(platform)) {
             if owns_proxy {
                 PROXY_CLAIMED.store(false, Ordering::SeqCst);
@@ -214,7 +236,9 @@ impl Runtime {
 
     /// A handle that wakes [`Runtime::next_event`] from any thread.
     pub fn waker(&self) -> Waker {
-        Waker { tx: self.tx.clone() }
+        Waker {
+            tx: self.tx.clone(),
+        }
     }
 
     /// Creates a component with `factory` and wraps it in a pane.
@@ -231,14 +255,21 @@ impl Runtime {
         E: std::fmt::Display,
     {
         let component = factory().map_err(|e| Error::Component(e.to_string()))?;
-        component.show().map_err(|e| Error::Component(e.to_string()))?;
+        component
+            .show()
+            .map_err(|e| Error::Component(e.to_string()))?;
         let Some(window) = self.shared.find_window(component.window()) else {
             let _ = component.hide();
             return Err(Error::Component(
                 "component window was not created by this runtime's platform".into(),
             ));
         };
-        Ok(SlintPane::new(component, window, picker.clone(), self.waker()))
+        Ok(SlintPane::new(
+            component,
+            window,
+            picker.clone(),
+            self.waker(),
+        ))
     }
 
     /// Number of Slint windows still alive. Zero once every pane has been dropped.
@@ -265,20 +296,7 @@ impl Runtime {
         let handle = std::thread::Builder::new()
             .name("ratatui-slint-input".into())
             .spawn(move || {
-                while !flag.load(Ordering::Relaxed) {
-                    match crossterm::event::poll(Duration::from_millis(50)) {
-                        Ok(true) => match crossterm::event::read() {
-                            Ok(ev) => {
-                                if tx.send(Msg::Terminal(ev)).is_err() {
-                                    break;
-                                }
-                            }
-                            Err(_) => break,
-                        },
-                        Ok(false) => {}
-                        Err(_) => break,
-                    }
-                }
+                read_terminal_events(&flag, &tx, crossterm::event::poll, crossterm::event::read)
             })
             .expect("spawn input thread");
         self.reader = Some((stop, handle));
@@ -301,17 +319,15 @@ impl Runtime {
     /// How long the loop may sleep: until the next Slint timer, or until the next frame when
     /// Slint is animating or a frame is pending. `None` means block until input.
     ///
-    /// Fires timers that are already due first, so a one-shot timer that expired while the host
-    /// was busy cannot pin the timeout at zero.
+    /// An overdue timer returns zero. Timers run in [`Runtime::next_event`] after the wait,
+    /// ensuring that their changes get a frame before the loop goes back to sleep.
     pub fn timeout(&self) -> Option<Duration> {
-        // Sample before advancing the clock: Slint clears the flag on every tick and sets it
-        // again only when the next render re-evaluates an animated binding.
         let animating = self.animating();
-        slint::platform::update_timers_and_animations();
         let mut timeout = slint::platform::duration_until_next_timer_update();
         if self.frame_pending || animating {
-            let until_frame =
-                self.next_frame_at().map_or(Duration::ZERO, |at| at.saturating_duration_since(Instant::now()));
+            let until_frame = self.next_frame_at().map_or(Duration::ZERO, |at| {
+                at.saturating_duration_since(Instant::now())
+            });
             timeout = Some(timeout.map_or(until_frame, |t| t.min(until_frame)));
         }
         timeout
@@ -393,7 +409,10 @@ impl Runtime {
     /// Slint tracks this per thread, not per window, and resets it whenever timers and animations
     /// advance; it is meaningful between a render and the next clock update.
     pub fn animating(&self) -> bool {
-        self.shared.live_windows().first().is_some_and(|w| w.window().has_active_animations())
+        self.shared
+            .live_windows()
+            .first()
+            .is_some_and(|w| w.window().has_active_animations())
     }
 
     /// Writes queued terminal output to `out`: OSC 52 clipboard copies and deletion of kitty
@@ -422,5 +441,94 @@ impl Runtime {
 impl Drop for Runtime {
     fn drop(&mut self) {
         self.stop_terminal_reader();
+    }
+}
+
+fn read_terminal_events(
+    stop: &AtomicBool,
+    tx: &Sender<Msg>,
+    mut poll: impl FnMut(Duration) -> std::io::Result<bool>,
+    mut read: impl FnMut() -> std::io::Result<Event>,
+) {
+    while !stop.load(Ordering::Relaxed) {
+        let result = match poll(Duration::from_millis(50)) {
+            Ok(false) => continue,
+            Ok(true) => read(),
+            Err(e) => Err(e),
+        };
+        match result {
+            Ok(event) => {
+                if tx.send(Msg::Terminal(event)).is_err() {
+                    return;
+                }
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
+            Err(_) => {
+                // Runtime and its platform retain senders, so exiting the reader alone cannot
+                // disconnect the channel. Wake a blocked host explicitly.
+                if !stop.load(Ordering::Relaxed) {
+                    let _ = tx.send(Msg::Quit);
+                }
+                return;
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn terminal_reader_errors_terminate_the_host_loop() {
+        for poll_fails in [true, false] {
+            let (tx, rx) = mpsc::channel();
+            read_terminal_events(
+                &AtomicBool::new(false),
+                &tx,
+                |_| {
+                    if poll_fails {
+                        Err(std::io::Error::other("poll failed"))
+                    } else {
+                        Ok(true)
+                    }
+                },
+                || Err(std::io::Error::other("read failed")),
+            );
+            assert!(matches!(rx.try_recv(), Ok(Msg::Quit)));
+        }
+    }
+
+    #[test]
+    fn stopping_terminal_reader_does_not_quit_the_host() {
+        let (tx, rx) = mpsc::channel();
+        read_terminal_events(
+            &AtomicBool::new(true),
+            &tx,
+            |_| panic!("stopped reader polled"),
+            || panic!("stopped reader read"),
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn terminal_reader_retries_interrupts_and_forwards_events() {
+        let (tx, rx) = mpsc::channel();
+        let mut calls = 0;
+        read_terminal_events(
+            &AtomicBool::new(false),
+            &tx,
+            |_| {
+                calls += 1;
+                match calls {
+                    1 => Err(std::io::ErrorKind::Interrupted.into()),
+                    2 => Ok(true),
+                    _ => Err(std::io::Error::other("disconnected")),
+                }
+            },
+            || Ok(Event::FocusLost),
+        );
+        assert!(matches!(rx.try_recv(), Ok(Msg::Terminal(Event::FocusLost))));
+        assert!(matches!(rx.try_recv(), Ok(Msg::Quit)));
     }
 }

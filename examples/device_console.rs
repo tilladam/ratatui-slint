@@ -154,8 +154,16 @@ struct ConfigEntry {
 }
 
 fn timestamp() -> String {
-    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
-    format!("{:02}:{:02}:{:02}", (secs / 3600) % 24, (secs / 60) % 60, secs % 60)
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    format!(
+        "{:02}:{:02}:{:02}",
+        (secs / 3600) % 24,
+        (secs / 60) % 60,
+        secs % 60
+    )
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -163,7 +171,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut session = TerminalSession::init(TerminalOptions::default())?;
     rt.spawn_terminal_reader();
     let mut pane = rt.create_pane(&session.picker, DevicePanel::new)?;
-    pane.set_scale(Scale::Fit { width: 800.0, height: 480.0 });
+    pane.set_scale(Scale::Fit {
+        width: 800.0,
+        height: 480.0,
+    });
     let halfblocks = pane.protocol_type() == ProtocolType::Halfblocks;
     let mut router = InputRouter::new();
     router.set_keyboard_enhanced(session.keyboard_enhanced);
@@ -196,7 +207,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             });
             if tick.is_multiple_of(3) {
-                let _ = tx.send(DeviceMsg::Log(format!("{} sensor: temperature {temp:.2} °C, power {power:.2} kW", timestamp())));
+                let _ = tx.send(DeviceMsg::Log(format!(
+                    "{} sensor: temperature {temp:.2} °C, power {power:.2} kW",
+                    timestamp()
+                )));
             }
             let services = vec![
                 ("hvac-control".into(), 2.0 + (t.sin() * 1.5).abs(), 18),
@@ -227,21 +241,47 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
         let tx = ui_tx.clone();
         pane.component().on_mode_changed(move |mode, on| {
-            let _ = tx.send(format!("{} panel: {mode} -> {}", timestamp(), if on { "on" } else { "off" }));
+            let _ = tx.send(format!(
+                "{} panel: {mode} -> {}",
+                timestamp(),
+                if on { "on" } else { "off" }
+            ));
         });
         let tx = ui_tx;
         pane.component().on_fan_changed(move |v| {
             let _ = tx.send(format!("{} panel: fan -> {v:.0} %", timestamp()));
         });
     }
-    push_log(&mut log, format!("{} console: connected to hvac-unit-3 ({:?})", timestamp(), pane.protocol_type()));
+    push_log(
+        &mut log,
+        format!(
+            "{} console: connected to hvac-unit-3 ({:?})",
+            timestamp(),
+            pane.protocol_type()
+        ),
+    );
 
     let mut config = [
-        ConfigEntry { key: "setpoint", value: "22.0".into() },
-        ConfigEntry { key: "eco", value: "false".into() },
-        ConfigEntry { key: "fan", value: "40".into() },
-        ConfigEntry { key: "hostname", value: "hvac-unit-3".into() },
-        ConfigEntry { key: "log-level", value: "info".into() },
+        ConfigEntry {
+            key: "setpoint",
+            value: "22.0".into(),
+        },
+        ConfigEntry {
+            key: "eco",
+            value: "false".into(),
+        },
+        ConfigEntry {
+            key: "fan",
+            value: "40".into(),
+        },
+        ConfigEntry {
+            key: "hostname",
+            value: "hvac-unit-3".into(),
+        },
+        ConfigEntry {
+            key: "log-level",
+            value: "info".into(),
+        },
     ];
     let mut config_state = ListState::default().with_selected(Some(0));
     let mut editing: Option<String> = None;
@@ -256,7 +296,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             LoopEvent::Terminal(ev) => {
                 dirty = true;
                 if let Event::Resize(..) = ev
-                    && pane.protocol_type() != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
+                    && pane.protocol_type()
+                        != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
                     && let Some(font) = ratatui_slint::terminal::cell_size()
                 {
                     pane.set_font_size(font); // font zoom changes pixels per cell
@@ -283,11 +324,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     } else {
                         match k.code {
                             KeyCode::Char('q') => return Ok(()),
-                            KeyCode::Tab => focus = if focus == Focus::Config { Focus::Log } else { Focus::Config },
+                            KeyCode::Tab => {
+                                focus = if focus == Focus::Config {
+                                    Focus::Log
+                                } else {
+                                    Focus::Config
+                                }
+                            }
                             KeyCode::Down if focus == Focus::Config => config_state.select_next(),
                             KeyCode::Up if focus == Focus::Config => config_state.select_previous(),
                             KeyCode::Up if focus == Focus::Log => log_scroll += 1,
-                            KeyCode::Down if focus == Focus::Log => log_scroll = log_scroll.saturating_sub(1),
+                            KeyCode::Down if focus == Focus::Log => {
+                                log_scroll = log_scroll.saturating_sub(1)
+                            }
                             KeyCode::Enter if focus == Focus::Config => {
                                 let i = config_state.selected().unwrap_or(0).min(config.len() - 1);
                                 editing = Some(config[i].value.clone());
@@ -315,12 +364,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         let size = session.terminal.size()?;
-        let [main, bottom, status] =
-            Layout::vertical([Constraint::Percentage(62), Constraint::Min(6), Constraint::Length(1)]).areas(Rect::from(size));
-        let [panel_col, config_area] = Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).areas(main);
-        let [log_area, svc_area] = Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)]).areas(bottom);
+        let [main, bottom, status] = Layout::vertical([
+            Constraint::Percentage(62),
+            Constraint::Min(6),
+            Constraint::Length(1),
+        ])
+        .areas(Rect::from(size));
+        let [panel_col, config_area] =
+            Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)])
+                .areas(main);
+        let [log_area, svc_area] =
+            Layout::horizontal([Constraint::Percentage(62), Constraint::Percentage(38)])
+                .areas(bottom);
         let (panel_area, readout_area) = if halfblocks {
-            let [p, r] = Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(panel_col);
+            let [p, r] =
+                Layout::vertical([Constraint::Min(3), Constraint::Length(1)]).areas(panel_col);
             (p, Some(r))
         } else {
             (panel_col, None)
@@ -328,11 +386,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let panel_block = Block::default()
             .borders(Borders::ALL)
             .title(" Device panel (live) ")
-            .border_style(if router.focused().is_some() { Style::default().fg(Color::Cyan) } else { Style::default() });
+            .border_style(if router.focused().is_some() {
+                Style::default().fg(Color::Cyan)
+            } else {
+                Style::default()
+            });
         let inner = panel_block.inner(panel_area);
         pane.set_area(inner);
         let changed = pane.update();
-        if !(changed || std::mem::take(&mut dirty)) {
+        let host_changed = std::mem::take(&mut dirty);
+        if !(changed || host_changed) {
             continue;
         }
 
@@ -341,7 +404,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             " {:.1}°C  target {:.1}°C  {}{}  fan {:.0}%  {:.2} kW",
             p.get_temperature(),
             p.get_setpoint(),
-            if p.get_heating() { "heating" } else { "standby" },
+            if p.get_heating() {
+                "heating"
+            } else {
+                "standby"
+            },
             if p.get_eco() { " eco" } else { "" },
             p.get_fan(),
             p.get_power_kw()
@@ -357,7 +424,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             f.render_widget(panel_block, panel_area);
             f.render_stateful_widget(SlintWidget, inner, &mut pane);
             if let Some(r) = readout_area {
-                f.render_widget(Paragraph::new(readout.clone()).style(Style::default().fg(Color::Yellow)), r);
+                f.render_widget(
+                    Paragraph::new(readout.clone()).style(Style::default().fg(Color::Yellow)),
+                    r,
+                );
             }
 
             let items: Vec<ListItem> = config
@@ -368,32 +438,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         Some(buf) if config_state.selected() == Some(i) => format!("{buf}▏"),
                         _ => e.value.clone(),
                     };
-                    ListItem::new(Line::from(vec![Span::styled(format!("{:<10}", e.key), Style::default().fg(Color::Gray)), Span::raw(value)]))
+                    ListItem::new(Line::from(vec![
+                        Span::styled(format!("{:<10}", e.key), Style::default().fg(Color::Gray)),
+                        Span::raw(value),
+                    ]))
                 })
                 .collect();
-            let border = |on: bool| if on { Style::default().fg(Color::Cyan) } else { Style::default() };
+            let border = |on: bool| {
+                if on {
+                    Style::default().fg(Color::Cyan)
+                } else {
+                    Style::default()
+                }
+            };
             let list = List::new(items)
-                .block(Block::default().borders(Borders::ALL).title(" Config ").border_style(border(focus == Focus::Config && router.focused().is_none())))
+                .block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Config ")
+                        .border_style(border(focus == Focus::Config && router.focused().is_none())),
+                )
                 .highlight_style(Style::default().add_modifier(Modifier::REVERSED));
             f.render_stateful_widget(list, config_area, &mut config_state);
 
             let height = log_area.height.saturating_sub(2) as usize;
             let end = log.len().saturating_sub(log_scroll.min(log.len()));
             let start = end.saturating_sub(height);
-            let lines: Vec<Line> = log.range(start..end).map(|l| Line::from(l.as_str())).collect();
+            let lines: Vec<Line> = log
+                .range(start..end)
+                .map(|l| Line::from(l.as_str()))
+                .collect();
             f.render_widget(
-                Paragraph::new(lines).block(Block::default().borders(Borders::ALL).title(" Log ").border_style(border(focus == Focus::Log && router.focused().is_none()))),
+                Paragraph::new(lines).block(
+                    Block::default()
+                        .borders(Borders::ALL)
+                        .title(" Log ")
+                        .border_style(border(focus == Focus::Log && router.focused().is_none())),
+                ),
                 log_area,
             );
 
-            let rows = services.iter().map(|(n, cpu, mem)| Row::new(vec![n.clone(), format!("{cpu:4.1}"), format!("{mem:3} MB")]));
+            let rows = services.iter().map(|(n, cpu, mem)| {
+                Row::new(vec![n.clone(), format!("{cpu:4.1}"), format!("{mem:3} MB")])
+            });
             f.render_widget(
-                Table::new(rows, [Constraint::Min(12), Constraint::Length(6), Constraint::Length(7)])
-                    .header(Row::new(vec!["SERVICE", "CPU%", "MEM"]).style(Style::default().add_modifier(Modifier::BOLD)))
-                    .block(Block::default().borders(Borders::ALL).title(" Services ")),
+                Table::new(
+                    rows,
+                    [
+                        Constraint::Min(12),
+                        Constraint::Length(6),
+                        Constraint::Length(7),
+                    ],
+                )
+                .header(
+                    Row::new(vec!["SERVICE", "CPU%", "MEM"])
+                        .style(Style::default().add_modifier(Modifier::BOLD)),
+                )
+                .block(Block::default().borders(Borders::ALL).title(" Services ")),
                 svc_area,
             );
-            f.render_widget(Paragraph::new(format!(" {:?} | {hint}", pane.protocol_type())).style(Style::default().fg(Color::Gray)), status);
+            f.render_widget(
+                Paragraph::new(format!(" {:?} | {hint}", pane.protocol_type()))
+                    .style(Style::default().fg(Color::Gray)),
+                status,
+            );
         })?;
         rt.write_pending_output(session.terminal.backend_mut())?;
     })();
@@ -404,14 +512,33 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 
 /// Pushes a config value into the panel, as the device would after a config change.
-fn apply_config(pane: &ratatui_slint::SlintPane<DevicePanel>, key: &str, value: &str, log: &mut VecDeque<String>) {
+fn apply_config(
+    pane: &ratatui_slint::SlintPane<DevicePanel>,
+    key: &str,
+    value: &str,
+    log: &mut VecDeque<String>,
+) {
     let p = pane.component();
     let ok = match key {
-        "setpoint" => value.parse::<f32>().ok().filter(|v| (15.0..=30.0).contains(v)).map(|v| p.set_setpoint(v)).is_some(),
+        "setpoint" => value
+            .parse::<f32>()
+            .ok()
+            .filter(|v| (15.0..=30.0).contains(v))
+            .map(|v| p.set_setpoint(v))
+            .is_some(),
         "eco" => value.parse::<bool>().ok().map(|v| p.set_eco(v)).is_some(),
-        "fan" => value.parse::<f32>().ok().filter(|v| (0.0..=100.0).contains(v)).map(|v| p.set_fan(v)).is_some(),
+        "fan" => value
+            .parse::<f32>()
+            .ok()
+            .filter(|v| (0.0..=100.0).contains(v))
+            .map(|v| p.set_fan(v))
+            .is_some(),
         _ => true,
     };
-    let line = if ok { format!("{} config: {key} = {value}", timestamp()) } else { format!("{} config: rejected {key} = {value}", timestamp()) };
+    let line = if ok {
+        format!("{} config: {key} = {value}", timestamp())
+    } else {
+        format!("{} config: rejected {key} = {value}", timestamp())
+    };
     log.push_back(line);
 }

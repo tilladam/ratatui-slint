@@ -42,13 +42,22 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rt = Runtime::new()?;
     rt.set_frame_rate(1000);
     let area = Rect::new(0, 0, COLS, ROWS);
-    println!("pane {COLS} x {ROWS} cells = {} x {} px, {FRAMES} frames each", COLS * 10, ROWS * 20);
+    println!(
+        "pane {COLS} x {ROWS} cells = {} x {} px, {FRAMES} frames each",
+        COLS * 10,
+        ROWS * 20
+    );
     println!(
         "{:<11} {:<6} {:>10} {:>12} {:>10} {:>12} {:>14}",
         "protocol", "change", "render ms", "snapshot ms", "encode ms", "draw ms", "bytes/frame"
     );
     for full in [false, true] {
-        for protocol in [ProtocolType::Halfblocks, ProtocolType::Sixel, ProtocolType::Kitty, ProtocolType::Iterm2] {
+        for protocol in [
+            ProtocolType::Halfblocks,
+            ProtocolType::Sixel,
+            ProtocolType::Kitty,
+            ProtocolType::Iterm2,
+        ] {
             #[allow(deprecated)]
             let mut picker = Picker::from_fontsize(FontSize::new(10, 20));
             picker.set_protocol_type(protocol);
@@ -61,14 +70,21 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             let bytes = writer.counter();
             let mut term = Terminal::with_options(
                 CrosstermBackend::new(writer),
-                TerminalOptions { viewport: Viewport::Fixed(area) },
+                TerminalOptions {
+                    viewport: Viewport::Fixed(area),
+                },
             )?;
             // Warm-up frame: first transmit and full screen paint are not steady state.
             pane.update();
             term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
             let start_bytes = bytes.get();
 
-            let (mut render, mut snapshot, mut encode, mut draw) = (Duration::ZERO, Duration::ZERO, Duration::ZERO, Duration::ZERO);
+            let (mut render, mut snapshot, mut encode, mut draw) = (
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::ZERO,
+                Duration::ZERO,
+            );
             for _ in 0..FRAMES {
                 std::thread::sleep(Duration::from_millis(17));
                 slint::platform::update_timers_and_animations();

@@ -5,16 +5,15 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use ratatui::buffer::Buffer;
 use ratatui::layout::{Rect, Size};
+use ratatui_image::FontSize;
 use ratatui_image::picker::{Picker, ProtocolType};
 use ratatui_image::protocol::StatefulProtocolType;
-use ratatui_image::FontSize;
 use slint::platform::WindowEvent;
 use slint::platform::software_renderer::MinimalSoftwareWindow;
 use slint::{ComponentHandle, PhysicalSize};
 
 use crate::encode::{Displayed, EncodeMode, Encoder, Frame, Job, Pixel};
 use crate::platform::Waker;
-
 
 /// How a kitty pane assigns image ids to frames.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -31,7 +30,11 @@ pub enum KittyIds {
 impl KittyIds {
     /// `RATATUI_SLINT_KITTY_IDS=fresh|stable`, if set.
     fn from_env() -> Option<Self> {
-        match std::env::var("RATATUI_SLINT_KITTY_IDS").ok()?.to_ascii_lowercase().as_str() {
+        match std::env::var("RATATUI_SLINT_KITTY_IDS")
+            .ok()?
+            .to_ascii_lowercase()
+            .as_str()
+        {
             "fresh" => Some(KittyIds::Fresh),
             "stable" => Some(KittyIds::Stable),
             _ => None,
@@ -53,14 +56,21 @@ fn next_kitty_id() -> u32 {
 }
 
 fn seed() -> u64 {
-    let t = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_nanos() as u64).unwrap_or(1);
+    let t = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(1);
     (t ^ (u64::from(std::process::id()) << 20)) | 1
 }
 
 /// The kitty delete command that frees an image and its data.
 fn kitty_delete(id: u32, tmux: bool) -> String {
     let seq = format!("\x1b_Ga=d,d=I,i={id},q=2\x1b\\");
-    if tmux { format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b")) } else { seq }
+    if tmux {
+        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
+    } else {
+        seq
+    }
 }
 
 /// Largest pane edge in physical pixels. Larger areas are treated as hidden instead of
@@ -101,7 +111,11 @@ impl Scale {
         let v = std::env::var("RATATUI_SLINT_SCALE").ok()?;
         match v.trim().to_ascii_lowercase().as_str() {
             "auto" => Some(Scale::Auto),
-            n => n.parse::<f32>().ok().filter(|f| f.is_finite() && *f > 0.0).map(Scale::Fixed),
+            n => n
+                .parse::<f32>()
+                .ok()
+                .filter(|f| f.is_finite() && *f > 0.0)
+                .map(Scale::Fixed),
         }
     }
 
@@ -182,11 +196,18 @@ pub struct SlintPane<C: ComponentHandle> {
 }
 
 impl<C: ComponentHandle> SlintPane<C> {
-    pub(crate) fn new(component: C, window: Rc<MinimalSoftwareWindow>, picker: Picker, waker: Waker) -> Self {
+    pub(crate) fn new(
+        component: C,
+        window: Rc<MinimalSoftwareWindow>,
+        picker: Picker,
+        waker: Waker,
+    ) -> Self {
         let font = picker.font_size();
         // One protocol state for the life of the pane. Each frame is encoded into a clone of it,
         // so a kitty pane keeps one image id instead of allocating a new one per frame.
-        let template = picker.new_resize_protocol(image::DynamicImage::new_rgb8(1, 1)).protocol_type_owned();
+        let template = picker
+            .new_resize_protocol(image::DynamicImage::new_rgb8(1, 1))
+            .protocol_type_owned();
         let encode_mode = EncodeMode::Auto;
         let encoder = Encoder::new(Self::threaded(encode_mode, &picker), waker.clone());
         let pane = Self {
@@ -216,7 +237,8 @@ impl<C: ComponentHandle> SlintPane<C> {
             retired_kitty_ids: Vec::new(),
             sixel_skips_last_row: false,
         };
-        pane.window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
+        pane.window
+            .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
         pane
     }
 
@@ -284,9 +306,13 @@ impl<C: ComponentHandle> SlintPane<C> {
 
     /// Sets the scale policy. Takes effect immediately.
     pub fn set_scale(&mut self, scale: Scale) {
+        if self.scale == scale {
+            return;
+        }
         self.scale = scale;
         if let Some(px) = self.px {
             self.apply_scale(px);
+            self.waker.wake();
         }
     }
 
@@ -296,6 +322,7 @@ impl<C: ComponentHandle> SlintPane<C> {
         self.encoder = Encoder::new(Self::threaded(mode, &self.picker), self.waker.clone());
         self.generation += 1;
         self.window.request_redraw();
+        self.waker.wake();
     }
 
     /// Chooses how kitty frames get image ids. `RATATUI_SLINT_KITTY_IDS` overrides the default.
@@ -305,8 +332,12 @@ impl<C: ComponentHandle> SlintPane<C> {
 
     /// Colour that transparent pixels are composited over for protocols without alpha.
     pub fn set_background(&mut self, rgb: [u8; 3]) {
+        if self.background == rgb {
+            return;
+        }
         self.background = rgb;
         self.window.request_redraw();
+        self.waker.wake();
     }
 
     /// Terminal cell size in pixels that the pane renders at.
@@ -338,6 +369,8 @@ impl<C: ComponentHandle> SlintPane<C> {
         }
         self.area = area;
         self.needs_redraw = true;
+        // Moving needs a terminal frame even when its pixel size and encoded image are unchanged.
+        self.waker.wake();
         let px = pixel_size(area, self.font);
         if px == self.px {
             return;
@@ -354,15 +387,15 @@ impl<C: ComponentHandle> SlintPane<C> {
                 self.displayed = None;
             }
         }
-        // A layout change made outside the loop must still produce a frame.
-        self.waker.wake();
     }
 
     fn apply_scale(&mut self, px: (u32, u32)) {
         let factor = self.scale.factor(px, self.font);
         if factor != self.scale_factor {
             self.scale_factor = factor;
-            self.window.dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: factor });
+            self.window.dispatch_event(WindowEvent::ScaleFactorChanged {
+                scale_factor: factor,
+            });
         }
         self.window.set_size(PhysicalSize::new(px.0, px.1));
         self.window.request_redraw();
@@ -402,7 +435,12 @@ impl<C: ComponentHandle> SlintPane<C> {
             };
             let size = Size::new(self.area.width, self.area.height - cut_rows);
             self.stats.snapshot = start.elapsed();
-            self.encoder.submit(Job { generation: self.generation, size, frame, kitty_id });
+            self.encoder.submit(Job {
+                generation: self.generation,
+                size,
+                frame,
+                kitty_id,
+            });
         }
         if let Some(done) = self.encoder.take_latest(self.generation) {
             self.stats.encode = done.elapsed;
@@ -427,8 +465,15 @@ impl<C: ComponentHandle> SlintPane<C> {
         match (&self.template, self.kitty_ids) {
             (StatefulProtocolType::Kitty(_), KittyIds::Fresh) => {
                 let id = next_kitty_id();
-                let compress = self.picker.capabilities().contains(&ratatui_image::picker::Capability::KittyCompression);
-                let kitty = ratatui_image::protocol::kitty::StatefulKitty::new(id, self.picker.tmux_detected(), compress);
+                let compress = self
+                    .picker
+                    .capabilities()
+                    .contains(&ratatui_image::picker::Capability::KittyCompression);
+                let kitty = ratatui_image::protocol::kitty::StatefulKitty::new(
+                    id,
+                    self.picker.tmux_detected(),
+                    compress,
+                );
                 (StatefulProtocolType::Kitty(kitty), Some(id))
             }
             (StatefulProtocolType::Kitty(_), KittyIds::Stable) => (self.template.clone(), Some(0)),
@@ -439,7 +484,10 @@ impl<C: ComponentHandle> SlintPane<C> {
     /// Kitty and iTerm2 carry an alpha channel; half-blocks and sixel get composited.
     fn keeps_alpha(&self) -> bool {
         cfg!(feature = "transparency")
-            && matches!(self.picker.protocol_type(), ProtocolType::Kitty | ProtocolType::Iterm2)
+            && matches!(
+                self.picker.protocol_type(),
+                ProtocolType::Kitty | ProtocolType::Iterm2
+            )
     }
 
     /// Draws the most recent encoded image. Used by [`crate::SlintWidget`].
@@ -450,14 +498,17 @@ impl<C: ComponentHandle> SlintPane<C> {
         }
         // Only the widget sees the whole screen. A sixel image ending on its last row would scroll
         // it, so such a pane drops that row: re-render shorter, and draw nothing until then.
-        let at_bottom = self.picker.protocol_type() == ProtocolType::Sixel && area.bottom() == buf.area.bottom();
+        let at_bottom = self.picker.protocol_type() == ProtocolType::Sixel
+            && area.bottom() == buf.area.bottom();
         if at_bottom != self.sixel_skips_last_row {
             self.sixel_skips_last_row = at_bottom;
             self.generation += 1;
             self.window.request_redraw();
             self.waker.wake();
         }
-        let Some((generation, protocol)) = &mut self.displayed else { return };
+        let Some((generation, protocol)) = &mut self.displayed else {
+            return;
+        };
         if at_bottom && protocol.cells().height >= area.height {
             return;
         }
@@ -507,6 +558,9 @@ impl<C: ComponentHandle> Drop for SlintPane<C> {
         // `show()` stored a strong reference to the component in the window; only `hide()`
         // releases it. Without this the component and window outlive the pane.
         let _ = self.component.hide();
+        for id in self.retired_kitty_ids.drain(..) {
+            crate::platform::queue_output(kitty_delete(id, self.picker.tmux_detected()).as_bytes());
+        }
         if let Some(id) = self.shown_kitty_id.filter(|&id| id != 0) {
             crate::platform::queue_output(kitty_delete(id, self.picker.tmux_detected()).as_bytes());
         }

@@ -38,16 +38,6 @@ def parse_script(text):
     return sorted(steps)
 
 
-def plain_text(d):
-    """Output with image payloads and escape sequences removed, whitespace collapsed. Cursor
-    moves become spaces, so words ratatui wrote separately still read as a line."""
-    d = re.sub(rb"\x1b[_P].*?\x1b\\", b"", d, flags=re.S)  # kitty APC, sixel DCS
-    d = re.sub(rb"\x1b\]52;.*?\x07", b"", d, flags=re.S)
-    d = re.sub(rb"\x1b\[\d+;\d+H", b" ", d)
-    d = re.sub(rb"\x1b\[[0-9;?<>=]*[ -/]*[@-~]", b"", d)
-    return " ".join(d.decode("utf-8", "replace").split())
-
-
 def last_screen(d, rows, cols):
     """Replays the output on a character grid and returns the screen as it was just before the
     program left the alternate screen. Handles cursor positioning, CR/LF and erase; ignores
@@ -104,6 +94,9 @@ def main():
     ap.add_argument("--screen", action="store_true", help="print the last screen")
     ap.add_argument("--env", action="append", default=[], help="NAME=VALUE for the child")
     ap.add_argument("--expect", action="append", default=[], help="text that must appear on screen")
+    ap.add_argument("--expect-exit", type=int, default=0, help="expected child exit code")
+    ap.add_argument("--require", action="append", default=[], choices=["graphics", "restore", "input-restore"])
+    ap.add_argument("--expect-idle", action="append", default=[], help="START:END marks between which zero bytes may be written")
     ap.add_argument("cmd", nargs=argparse.REMAINDER)
     args = ap.parse_args()
     cmd = args.cmd[1:] if args.cmd and args.cmd[0] == "--" else args.cmd
@@ -150,6 +143,7 @@ def main():
                 subprocess.run(rest, shell=True, check=False)
         if elapsed > args.timeout:
             os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
             status = "timeout"
             break
         r, _, _ = select.select([fd], [], [], 0.02)
@@ -218,16 +212,14 @@ def main():
         "entered alt screen": b"\x1b[?1049h" in d,
         "left alt screen": b"\x1b[?1049l" in d,
         "mouse capture off": b"\x1b[?1000l" in d,
+        "bracketed paste off": b"\x1b[?2004l" in d,
+        "focus reporting off": b"\x1b[?1004l" in d,
         "half-block glyphs": "▀".encode() in d,
         "sixel data": b"\x1bP" in d and b"q\"" in d,
         "kitty transmit": b"\x1b_Ga=T" in d or b",a=T," in d,
     }
-    text = plain_text(d)
     screen = last_screen(d, args.rows, args.cols)
-    screen_flat = " ".join(screen.split())
-    failed = [e for e in args.expect if " ".join(e.split()) not in text and " ".join(e.split()) not in screen_flat]
-    for e in args.expect:
-        checks[f"expect {e!r}"] = e not in failed
+    failed = validate_checks(checks, screen, marks, args)
     names = sorted(marks, key=marks.get)
     for a, b in zip(names, names[1:]):
         checks[f"bytes {a}->{b}"] = marks[b] - marks[a]
@@ -237,7 +229,35 @@ def main():
         print(f"{k:24} {v}")
     if args.screen:
         print(screen)
-    sys.exit(0 if status == 0 and not failed else 1)
+    if failed:
+        print("failed: " + ", ".join(failed))
+    sys.exit(1 if failed else 0)
+
+
+def validate_checks(checks, screen, marks, args):
+    failed = []
+    if checks["exit status"] != args.expect_exit:
+        failed.append("exit status")
+    screen_flat = " ".join(screen.split())
+    for text in args.expect:
+        key = f"expect {text!r}"
+        checks[key] = " ".join(text.split()) in screen_flat
+        if not checks[key]:
+            failed.append(key)
+    required = {
+        "graphics": [{"none": "half-block glyphs", "sixel": "sixel data", "kitty": "kitty transmit"}[args.protocol]],
+        "restore": ["entered alt screen", "left alt screen"],
+        "input-restore": ["mouse capture off", "bracketed paste off", "focus reporting off"],
+    }
+    for name in args.require:
+        failed.extend(key for key in required[name] if not checks[key])
+    for interval in args.expect_idle:
+        start, end = interval.split(":", 1)
+        key = f"idle {start}->{end}"
+        checks[key] = start in marks and end in marks and marks[start] == marks[end]
+        if not checks[key]:
+            failed.append(key)
+    return failed
 
 
 if __name__ == "__main__":

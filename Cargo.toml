@@ -2,7 +2,7 @@
 name = "ratatui-slint"
 version = "0.1.0"
 edition = "2024"
-rust-version = "1.88"
+rust-version = "1.92"
 license = "MIT"
 description = "Embed Slint components as pixel widgets inside ratatui applications"
 repository = "https://github.com/tilladam/ratatui-slint"
@@ -36,6 +36,10 @@ i-slint-core = { version = "1.18", optional = true, default-features = false, fe
 
 [dev-dependencies]
 sysinfo = { version = "0.39", default-features = false, features = ["system"] }
+
+[[example]]
+name = "device_console"
+required-features = ["image-decoders"]
 
 [workspace]
 members = ["examples/live-preview"]

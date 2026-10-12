@@ -45,3 +45,23 @@ Revisit when: the A/B run shows stable ids refresh correctly.
 Cost: one user round-trip; default switched to fresh ids plus delete-after-draw.
 Scope: project     Status: active
 Result 2026-10-11: user A/B in kitty with sysmon (no keys involved) — fresh ids work, stable ids flicker and draw incorrectly. Stable-id cause confirmed. The frozen `hello` had a second cause: an empty TouchArea inside the FocusScope took the click, so the FocusScope never got focus (reproduced headless, fixed). Lesson: an example that needs input to show change cannot test rendering; test rendering with something that animates by itself.
+
+## 2026-10-11 · Workspace feature unification masked the no-default-features test failure · #Cargo.toml #testing #features
+Situation: whole-codebase review, checking the optional image-decoders feature.
+Tried: `cargo test --workspace --no-default-features` as evidence for the library's configuration without default features.
+Outcome: the workspace command passed, but `cargo test -p ratatui-slint --no-default-features` failed to compile tests/input.rs because generated std-widgets code references the unavailable load_image_from_embedded_data function. The library-only unit tests passed.
+Evidence: 2026-10-11 review runs; examples/live-preview depends on ratatui-slint with default features, enabling image-decoders through feature unification in the workspace run.
+Next time: verified — test the library package in isolation with `-p ratatui-slint --no-default-features`; a workspace-wide pass does not establish this configuration's support.
+Revisit when: the preview dependency disables default features or Cargo's feature-unification behaviour changes.
+Cost: an extra test run and correction of the preliminary interpretation.
+Scope: project     Status: active
+
+## 2026-10-12 · Delaying scripted pause did not fix the monitor's idle writes · #examples/sysmon.rs #scripts/smoke.sh #testing
+Situation: enforcing zero output during a paused system monitor's idle interval.
+Tried: suspected the pause key was consumed during startup; moved the key and measurement window one second later.
+Outcome: the delayed run still wrote status updates. Temporary frame tracing showed paused=true while the host dirty flag remained true across pane redraws.
+Evidence: 2026-10-12 fake-terminal runs and frame trace; `pane_changed || table_dirty.replace(false)` short-circuited before clearing the flag. After clearing it independently and allowing animations to settle, the measured interval wrote zero bytes.
+Next time: verified — inspect dirty-state consumption before adjusting scripted timing; side effects that consume a dirty flag must run even when another redraw condition is true.
+Revisit when: redraw conditions no longer consume mutable dirty state.
+Cost: two diagnostic terminal runs and a temporary instrumented example build.
+Scope: project     Status: active

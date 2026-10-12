@@ -29,7 +29,10 @@ pub struct CountingWriter<W> {
 
 impl<W> CountingWriter<W> {
     pub fn new(inner: W) -> Self {
-        Self { inner, count: Arc::default() }
+        Self {
+            inner,
+            count: Arc::default(),
+        }
     }
 
     /// A handle that reads the running total from anywhere.

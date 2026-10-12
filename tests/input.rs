@@ -12,6 +12,7 @@ use crossterm::event::{
 use ratatui::layout::Rect;
 use ratatui_slint::{InputRouter, PaneInput, Routed, Runtime};
 
+#[cfg(feature = "image-decoders")]
 slint::slint! {
     import { LineEdit, TextEdit, ComboBox } from "std-widgets.slint";
 
@@ -47,6 +48,7 @@ slint::slint! {
     }
 }
 
+#[cfg(feature = "image-decoders")]
 const AREA: Rect = Rect::new(5, 2, 40, 15);
 
 fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
@@ -54,18 +56,30 @@ fn key(code: KeyCode, modifiers: KeyModifiers) -> Event {
 }
 
 fn key_kind(code: KeyCode, kind: KeyEventKind) -> Event {
-    Event::Key(KeyEvent { code, modifiers: KeyModifiers::NONE, kind, state: KeyEventState::NONE })
+    Event::Key(KeyEvent {
+        code,
+        modifiers: KeyModifiers::NONE,
+        kind,
+        state: KeyEventState::NONE,
+    })
 }
 
 fn mouse(kind: MouseEventKind, column: u16, row: u16) -> Event {
-    Event::Mouse(MouseEvent { kind, column, row, modifiers: KeyModifiers::NONE })
+    Event::Mouse(MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers: KeyModifiers::NONE,
+    })
 }
 
 /// Cell for a logical pixel position inside the pane (cells are 10 × 20 px).
+#[cfg(feature = "image-decoders")]
 fn cell(x: u16, y: u16) -> (u16, u16) {
     (AREA.x + x / 10, AREA.y + y / 20)
 }
 
+#[cfg(feature = "image-decoders")]
 fn click(router: &mut InputRouter, panes: &[&dyn PaneInput], x: u16, y: u16) -> Routed {
     let (c, r) = cell(x, y);
     let down = router.route(&mouse(MouseEventKind::Down(MouseButton::Left), c, r), panes);
@@ -73,13 +87,23 @@ fn click(router: &mut InputRouter, panes: &[&dyn PaneInput], x: u16, y: u16) -> 
     down
 }
 
+#[cfg(feature = "image-decoders")]
 fn type_text(router: &mut InputRouter, panes: &[&dyn PaneInput], text: &str) {
     for ch in text.chars() {
-        let mods = if ch.is_uppercase() { KeyModifiers::SHIFT } else { KeyModifiers::NONE };
-        assert_eq!(router.route(&key(KeyCode::Char(ch), mods), panes), Routed::Consumed, "typing {ch:?}");
+        let mods = if ch.is_uppercase() {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        assert_eq!(
+            router.route(&key(KeyCode::Char(ch), mods), panes),
+            Routed::Consumed,
+            "typing {ch:?}"
+        );
     }
 }
 
+#[cfg(feature = "image-decoders")]
 fn editor() -> (Runtime, ratatui_slint::SlintPane<Editor>) {
     let rt = Runtime::new().unwrap();
     let mut pane = rt.create_pane(&halfblocks(), Editor::new).unwrap();
@@ -90,6 +114,7 @@ fn editor() -> (Runtime, ratatui_slint::SlintPane<Editor>) {
 }
 
 #[test]
+#[cfg(feature = "image-decoders")]
 fn line_edit_takes_typing_and_shortcuts() {
     let (rt, pane) = editor();
     let mut router = InputRouter::new();
@@ -120,16 +145,21 @@ fn line_edit_takes_typing_and_shortcuts() {
 }
 
 #[test]
+#[cfg(feature = "image-decoders")]
 fn bracketed_paste_inserts_into_focused_field() {
     let (_rt, pane) = editor();
     let mut router = InputRouter::new();
     let panes: [&dyn PaneInput; 1] = [&pane];
     click(&mut router, &panes, 60, 25);
-    assert_eq!(router.route(&Event::Paste("pasted text".into()), &panes), Routed::Consumed);
+    assert_eq!(
+        router.route(&Event::Paste("pasted text".into()), &panes),
+        Routed::Consumed
+    );
     assert_eq!(pane.component().get_line(), "pasted text");
 }
 
 #[test]
+#[cfg(feature = "image-decoders")]
 fn text_edit_takes_multiline_input_and_scroll() {
     let (_rt, pane) = editor();
     let mut router = InputRouter::new();
@@ -140,10 +170,14 @@ fn text_edit_takes_multiline_input_and_scroll() {
     type_text(&mut router, &panes, "two");
     assert_eq!(pane.component().get_body(), "one\ntwo");
     let (c, r) = cell(60, 70);
-    assert_eq!(router.route(&mouse(MouseEventKind::ScrollDown, c, r), &panes), Routed::Consumed);
+    assert_eq!(
+        router.route(&mouse(MouseEventKind::ScrollDown, c, r), &panes),
+        Routed::Consumed
+    );
 }
 
 #[test]
+#[cfg(feature = "image-decoders")]
 fn combo_box_popup_selects_an_item() {
     let (_rt, pane) = editor();
     let mut router = InputRouter::new();
@@ -159,7 +193,11 @@ fn combo_box_popup_selects_an_item() {
         click(&mut router, &panes, 60, 155);
         false
     });
-    assert!(picked, "no ComboBox item could be picked; choice = {}", pane.component().get_choice());
+    assert!(
+        picked,
+        "no ComboBox item could be picked; choice = {}",
+        pane.component().get_choice()
+    );
 
     // Keyboard works too once the box has focus.
     let before = pane.component().get_choice();
@@ -170,22 +208,49 @@ fn combo_box_popup_selects_an_item() {
 }
 
 #[test]
+#[cfg(feature = "image-decoders")]
 fn drag_leaving_the_pane_keeps_capture() {
     let (_rt, pane) = editor();
     let mut router = InputRouter::new();
     let panes: [&dyn PaneInput; 1] = [&pane];
     let (c, r) = cell(300, 50);
-    assert_eq!(router.route(&mouse(MouseEventKind::Down(MouseButton::Left), c, r), &panes), Routed::Consumed);
+    assert_eq!(
+        router.route(
+            &mouse(MouseEventKind::Down(MouseButton::Left), c, r),
+            &panes
+        ),
+        Routed::Consumed
+    );
     // Drag to column 0, left of the pane: still delivered, at a negative position.
-    assert_eq!(router.route(&mouse(MouseEventKind::Drag(MouseButton::Left), 0, r), &panes), Routed::Consumed);
-    assert!(pane.component().get_drag_x() < 0.0, "drag-x = {}", pane.component().get_drag_x());
-    assert_eq!(router.route(&mouse(MouseEventKind::Up(MouseButton::Left), 0, r), &panes), Routed::Consumed);
+    assert_eq!(
+        router.route(
+            &mouse(MouseEventKind::Drag(MouseButton::Left), 0, r),
+            &panes
+        ),
+        Routed::Consumed
+    );
+    assert!(
+        pane.component().get_drag_x() < 0.0,
+        "drag-x = {}",
+        pane.component().get_drag_x()
+    );
+    assert_eq!(
+        router.route(&mouse(MouseEventKind::Up(MouseButton::Left), 0, r), &panes),
+        Routed::Consumed
+    );
     assert_eq!(pane.component().get_ups(), 1);
     // Capture ended: the next click outside is ratatui's.
-    assert_eq!(router.route(&mouse(MouseEventKind::Down(MouseButton::Left), 0, r), &panes), Routed::Unhandled);
+    assert_eq!(
+        router.route(
+            &mouse(MouseEventKind::Down(MouseButton::Left), 0, r),
+            &panes
+        ),
+        Routed::Unhandled
+    );
 }
 
 #[test]
+#[cfg(feature = "image-decoders")]
 fn popup_closes_on_click_outside_the_pane() {
     let (_rt, pane) = editor();
     let mut router = InputRouter::new();
@@ -193,19 +258,34 @@ fn popup_closes_on_click_outside_the_pane() {
     click(&mut router, &panes, 60, 25); // focus the pane
     pane.component().invoke_open_popup();
     click(&mut router, &panes, 300, 190);
-    assert_eq!(pane.component().get_popup_hits(), 1, "click inside the open popup");
+    assert_eq!(
+        pane.component().get_popup_hits(),
+        1,
+        "click inside the open popup"
+    );
 
     pane.component().invoke_open_popup();
     // Click outside the pane: ratatui gets it, and the popup closes.
     assert_eq!(
-        router.route(&mouse(MouseEventKind::Down(MouseButton::Left), 0, 0), &panes),
+        router.route(
+            &mouse(MouseEventKind::Down(MouseButton::Left), 0, 0),
+            &panes
+        ),
         Routed::Unhandled
     );
     router.route(&mouse(MouseEventKind::Up(MouseButton::Left), 0, 0), &panes);
     assert_eq!(router.focused(), None);
     click(&mut router, &panes, 300, 190);
-    assert_eq!(pane.component().get_popup_hits(), 1, "popup should be closed");
-    assert_eq!(pane.component().get_under_hits(), 1, "click should reach the item under the popup");
+    assert_eq!(
+        pane.component().get_popup_hits(),
+        1,
+        "popup should be closed"
+    );
+    assert_eq!(
+        pane.component().get_under_hits(),
+        1,
+        "click should reach the item under the popup"
+    );
 }
 
 #[test]
@@ -217,15 +297,30 @@ fn rejected_keys_fall_back_to_ratatui() {
     let panes: [&dyn PaneInput; 1] = [&pane];
 
     // Nothing focused: everything is ratatui's.
-    assert_eq!(router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes), Routed::Unhandled);
+    assert_eq!(
+        router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes),
+        Routed::Unhandled
+    );
     router.focus(pane.id(), &panes);
-    assert_eq!(router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes), Routed::Consumed);
+    assert_eq!(
+        router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes),
+        Routed::Consumed
+    );
     assert!((pane.component().get_value() - 0.3).abs() < 1e-5);
-    assert_eq!(router.route(&key(KeyCode::Char('x'), KeyModifiers::NONE), &panes), Routed::Unhandled);
-    assert_eq!(router.route(&key(KeyCode::F(5), KeyModifiers::NONE), &panes), Routed::Unhandled);
+    assert_eq!(
+        router.route(&key(KeyCode::Char('x'), KeyModifiers::NONE), &panes),
+        Routed::Unhandled
+    );
+    assert_eq!(
+        router.route(&key(KeyCode::F(5), KeyModifiers::NONE), &panes),
+        Routed::Unhandled
+    );
 
     // Slint keeps Tab for its own focus chain even when the FocusScope rejects it.
-    assert_eq!(router.route(&key(KeyCode::Tab, KeyModifiers::NONE), &panes), Routed::Consumed);
+    assert_eq!(
+        router.route(&key(KeyCode::Tab, KeyModifiers::NONE), &panes),
+        Routed::Consumed
+    );
 
     // The reserved exit key leaves the pane before Slint sees it.
     router.focus(pane.id(), &panes);
@@ -234,7 +329,10 @@ fn rejected_keys_fall_back_to_ratatui() {
         Routed::FocusReleased(pane.id())
     );
     assert_eq!(router.focused(), None);
-    assert_eq!(router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes), Routed::Unhandled);
+    assert_eq!(
+        router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes),
+        Routed::Unhandled
+    );
 }
 
 #[test]
@@ -270,16 +368,31 @@ fn hover_and_pointer_outside_panes() {
     b.set_area(Rect::new(10, 0, 10, 5));
     let mut router = InputRouter::new();
     let panes: [&dyn PaneInput; 2] = [&a, &b];
-    assert_eq!(router.route(&mouse(MouseEventKind::Moved, 2, 2), &panes), Routed::Consumed);
-    assert_eq!(router.route(&mouse(MouseEventKind::Moved, 12, 2), &panes), Routed::Consumed);
-    assert_eq!(router.route(&mouse(MouseEventKind::Moved, 30, 2), &panes), Routed::Unhandled);
+    assert_eq!(
+        router.route(&mouse(MouseEventKind::Moved, 2, 2), &panes),
+        Routed::Consumed
+    );
+    assert_eq!(
+        router.route(&mouse(MouseEventKind::Moved, 12, 2), &panes),
+        Routed::Consumed
+    );
+    assert_eq!(
+        router.route(&mouse(MouseEventKind::Moved, 30, 2), &panes),
+        Routed::Unhandled
+    );
 
     // Clicking moves focus between panes.
-    router.route(&mouse(MouseEventKind::Down(MouseButton::Left), 2, 2), &panes);
+    router.route(
+        &mouse(MouseEventKind::Down(MouseButton::Left), 2, 2),
+        &panes,
+    );
     router.route(&mouse(MouseEventKind::Up(MouseButton::Left), 2, 2), &panes);
     assert_eq!(router.focused(), Some(a.id()));
     assert_eq!(a.component().get_clicks(), 1);
-    router.route(&mouse(MouseEventKind::Down(MouseButton::Left), 12, 2), &panes);
+    router.route(
+        &mouse(MouseEventKind::Down(MouseButton::Left), 12, 2),
+        &panes,
+    );
     router.route(&mouse(MouseEventKind::Up(MouseButton::Left), 12, 2), &panes);
     assert_eq!(router.focused(), Some(b.id()));
     assert_eq!(b.component().get_clicks(), 1);
@@ -287,7 +400,10 @@ fn hover_and_pointer_outside_panes() {
     // A dropped pane is forgotten.
     drop(b);
     let panes: [&dyn PaneInput; 1] = [&a];
-    assert_eq!(router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes), Routed::Unhandled);
+    assert_eq!(
+        router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes),
+        Routed::Unhandled
+    );
     assert_eq!(router.focused(), None);
 }
 
@@ -315,11 +431,16 @@ fn click_focuses_a_focus_scope_only_without_inner_touch_area() {
     let send = |pane: &dyn PaneInput| {
         let mut router = InputRouter::new();
         let panes: [&dyn PaneInput; 1] = [pane];
-        router.route(&mouse(MouseEventKind::Down(MouseButton::Left), 3, 2), &panes);
+        router.route(
+            &mouse(MouseEventKind::Down(MouseButton::Left), 3, 2),
+            &panes,
+        );
         router.route(&mouse(MouseEventKind::Up(MouseButton::Left), 3, 2), &panes);
         router.route(&key(KeyCode::Char('+'), KeyModifiers::NONE), &panes)
     };
-    let mut with = rt.create_pane(&halfblocks(), KeysWithTouchArea::new).unwrap();
+    let mut with = rt
+        .create_pane(&halfblocks(), KeysWithTouchArea::new)
+        .unwrap();
     with.set_area(Rect::new(0, 0, 20, 5));
     assert_eq!(send(&with), Routed::Unhandled);
     assert_eq!(with.component().get_hits(), 0);

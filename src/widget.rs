@@ -1,9 +1,9 @@
 //! The ratatui widget that draws a [`crate::SlintPane`].
 
+use crate::pane::PaneRender;
 use ratatui::buffer::Buffer;
 use ratatui::layout::Rect;
 use ratatui::widgets::StatefulWidget;
-use crate::pane::PaneRender;
 
 /// Draws a pane's latest encoded frame into its area.
 ///

@@ -21,7 +21,8 @@ fn two_panes_render_side_by_side() {
     assert_eq!(rt.live_windows(), 2);
 
     let mut term = test_terminal(60, 12);
-    let [left, right] = Layout::horizontal([Constraint::Percentage(50); 2]).areas(Rect::new(0, 0, 60, 12));
+    let [left, right] =
+        Layout::horizontal([Constraint::Percentage(50); 2]).areas(Rect::new(0, 0, 60, 12));
     a.set_area(left);
     b.set_area(right);
     assert!(rt.begin_frame());
@@ -33,8 +34,14 @@ fn two_panes_render_side_by_side() {
     })
     .unwrap();
     let buf = term.backend().buffer();
-    assert_eq!(painted_cells(buf, left), (left.width * left.height) as usize);
-    assert_eq!(painted_cells(buf, right), (right.width * right.height) as usize);
+    assert_eq!(
+        painted_cells(buf, left),
+        (left.width * left.height) as usize
+    );
+    assert_eq!(
+        painted_cells(buf, right),
+        (right.width * right.height) as usize
+    );
     assert_eq!((a.frames(), b.frames()), (1, 1));
 }
 
@@ -95,7 +102,10 @@ fn factory_errors_are_reported() {
 #[test]
 fn second_runtime_on_one_thread_fails() {
     let _rt = Runtime::new().unwrap();
-    assert!(matches!(Runtime::new(), Err(ratatui_slint::Error::Platform(_))));
+    assert!(matches!(
+        Runtime::new(),
+        Err(ratatui_slint::Error::Platform(_))
+    ));
 }
 
 #[test]
@@ -105,10 +115,14 @@ fn idle_ui_blocks_and_writes_nothing() {
     let (mut term, bytes) = counting_terminal(30, 6);
     let area = Rect::new(0, 0, 30, 6);
     pane.set_area(area);
+    // Process the initial layout wake and Slint's deferred window-setup timer before checking
+    // steady-state idle behaviour. timeout() reports timers without firing them.
+    assert!(matches!(rt.next_event(), ratatui_slint::LoopEvent::Wake));
 
     let mut draw = |rt: &mut Runtime, pane: &mut ratatui_slint::SlintPane<Still>| {
         if rt.begin_frame() && pane.update() {
-            term.draw(|f| f.render_stateful_widget(SlintWidget, area, pane)).unwrap();
+            term.draw(|f| f.render_stateful_widget(SlintWidget, area, pane))
+                .unwrap();
         }
     };
     draw(&mut rt, &mut pane);
@@ -124,10 +138,15 @@ fn idle_ui_blocks_and_writes_nothing() {
         let _ = rt.next_event_capped(Some(Duration::from_millis(40)));
         draw(&mut rt, &mut pane);
     }
-    assert_eq!(bytes.get(), after_first, "idle frames wrote to the terminal");
+    assert_eq!(
+        bytes.get(),
+        after_first,
+        "idle frames wrote to the terminal"
+    );
 
     // A property change produces exactly one more frame.
-    pane.component().set_fill(slint::Color::from_rgb_u8(200, 30, 30));
+    pane.component()
+        .set_fill(slint::Color::from_rgb_u8(200, 30, 30));
     rt.request_frame();
     std::thread::sleep(Duration::from_millis(40));
     draw(&mut rt, &mut pane);
@@ -158,7 +177,10 @@ fn animation_keeps_the_loop_ticking_at_the_frame_cap() {
         }
     }
     // 20 fps for 0.5 s is 10 frames; allow scheduler slack on both sides.
-    assert!((7..=11).contains(&frames), "rendered {frames} frames in 0.5 s at a 20 fps cap");
+    assert!(
+        (7..=11).contains(&frames),
+        "rendered {frames} frames in 0.5 s at a 20 fps cap"
+    );
 }
 
 #[test]
@@ -169,12 +191,17 @@ fn widget_alone_lays_out_the_pane() {
     let area = Rect::new(0, 0, 20, 5);
     let _ = rt.begin_frame();
     // No set_area: the first draw adopts the area, the next frame renders it.
-    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
+        .unwrap();
     assert_eq!(pane.area(), area);
-    assert!(matches!(rt.next_event_capped(Some(Duration::from_millis(100))), ratatui_slint::LoopEvent::Wake));
+    assert!(matches!(
+        rt.next_event_capped(Some(Duration::from_millis(100))),
+        ratatui_slint::LoopEvent::Wake
+    ));
     std::thread::sleep(Duration::from_millis(40));
     assert!(rt.begin_frame() && pane.update());
-    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
+        .unwrap();
     assert_eq!(painted_cells(term.backend().buffer(), area), 100);
 }
 
@@ -192,7 +219,9 @@ fn kitty_id_of_first_cell(term: &ratatui::Terminal<ratatui::backend::TestBackend
 #[test]
 fn stable_kitty_ids_reuse_one_id() {
     let rt = Runtime::new().unwrap();
-    let mut pane = rt.create_pane(&picker(ProtocolType::Kitty), Still::new).unwrap();
+    let mut pane = rt
+        .create_pane(&picker(ProtocolType::Kitty), Still::new)
+        .unwrap();
     pane.set_encode_mode(EncodeMode::Inline);
     pane.set_kitty_ids(ratatui_slint::KittyIds::Stable);
     let area = Rect::new(0, 0, 8, 2);
@@ -200,12 +229,17 @@ fn stable_kitty_ids_reuse_one_id() {
     let mut term = test_terminal(8, 2);
     let mut ids = Vec::new();
     for color in [(200, 0, 0), (0, 200, 0), (0, 0, 200)] {
-        pane.component().set_fill(slint::Color::from_rgb_u8(color.0, color.1, color.2));
+        pane.component()
+            .set_fill(slint::Color::from_rgb_u8(color.0, color.1, color.2));
         assert!(pane.update());
-        term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+        term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
+            .unwrap();
         ids.push(kitty_id_of_first_cell(&term));
     }
-    assert!(ids.windows(2).all(|w| w[0] == w[1]), "image ids changed between frames: {ids:?}");
+    assert!(
+        ids.windows(2).all(|w| w[0] == w[1]),
+        "image ids changed between frames: {ids:?}"
+    );
     let mut out = Vec::new();
     rt.write_pending_output(&mut out).unwrap();
     assert!(out.is_empty(), "stable ids never delete images mid-run");
@@ -216,7 +250,9 @@ fn stable_kitty_ids_reuse_one_id() {
 #[test]
 fn fresh_kitty_ids_delete_the_replaced_image_after_drawing() {
     let rt = Runtime::new().unwrap();
-    let mut pane = rt.create_pane(&picker(ProtocolType::Kitty), Still::new).unwrap();
+    let mut pane = rt
+        .create_pane(&picker(ProtocolType::Kitty), Still::new)
+        .unwrap();
     pane.set_encode_mode(EncodeMode::Inline);
     pane.set_kitty_ids(ratatui_slint::KittyIds::Fresh);
     let area = Rect::new(0, 0, 8, 2);
@@ -224,17 +260,23 @@ fn fresh_kitty_ids_delete_the_replaced_image_after_drawing() {
     let mut term = test_terminal(8, 2);
 
     assert!(pane.update());
-    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
+        .unwrap();
     let first = kitty_id_of_first_cell(&term);
     let mut out = Vec::new();
     rt.write_pending_output(&mut out).unwrap();
     assert!(out.is_empty(), "nothing to delete after the first frame");
 
-    pane.component().set_fill(slint::Color::from_rgb_u8(0, 0, 200));
+    pane.component()
+        .set_fill(slint::Color::from_rgb_u8(0, 0, 200));
     assert!(pane.update());
     rt.write_pending_output(&mut out).unwrap();
-    assert!(out.is_empty(), "the old image must stay until the new frame is drawn");
-    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    assert!(
+        out.is_empty(),
+        "the old image must stay until the new frame is drawn"
+    );
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
+        .unwrap();
     let second = kitty_id_of_first_cell(&term);
     assert_ne!(first, second);
     rt.write_pending_output(&mut out).unwrap();
@@ -245,7 +287,10 @@ fn fresh_kitty_ids_delete_the_replaced_image_after_drawing() {
     drop(pane);
     let mut out = Vec::new();
     rt.write_pending_output(&mut out).unwrap();
-    assert_eq!(String::from_utf8(out).unwrap(), format!("\x1b_Ga=d,d=I,i={second},q=2\x1b\\"));
+    assert_eq!(
+        String::from_utf8(out).unwrap(),
+        format!("\x1b_Ga=d,d=I,i={second},q=2\x1b\\")
+    );
 }
 
 #[test]
@@ -260,10 +305,15 @@ fn waker_wakes_the_loop() {
     let _ = rt.begin_frame();
     let deadline = std::time::Instant::now() + Duration::from_secs(2);
     loop {
-        if let ratatui_slint::LoopEvent::Wake = rt.next_event_capped(Some(Duration::from_millis(100))) {
+        if let ratatui_slint::LoopEvent::Wake =
+            rt.next_event_capped(Some(Duration::from_millis(100)))
+        {
             break;
         }
-        assert!(std::time::Instant::now() < deadline, "waker never woke the loop");
+        assert!(
+            std::time::Instant::now() < deadline,
+            "waker never woke the loop"
+        );
     }
 }
 
@@ -283,16 +333,114 @@ fn font_size_change_rerenders_at_the_new_cell_size() {
     assert_eq!(pane.framebuffer().len(), 160 * 80);
     assert!(pane.update());
     assert_eq!(pane.frames(), 2);
-    assert_eq!(pane.displayed_cells(), Some(ratatui::layout::Size::new(20, 5)));
+    assert_eq!(
+        pane.displayed_cells(),
+        Some(ratatui::layout::Size::new(20, 5))
+    );
 
     // Pointer input still lands in the pane after the change.
     let mut router = InputRouter::new();
     let panes: [&dyn PaneInput; 1] = [&pane];
-    let at = |kind| crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
-        kind, column: 19, row: 2, modifiers: crossterm::event::KeyModifiers::NONE,
-    });
+    let at = |kind| {
+        crossterm::event::Event::Mouse(crossterm::event::MouseEvent {
+            kind,
+            column: 19,
+            row: 2,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        })
+    };
     use crossterm::event::{MouseButton, MouseEventKind};
     router.route(&at(MouseEventKind::Down(MouseButton::Left)), &panes);
     router.route(&at(MouseEventKind::Up(MouseButton::Left)), &panes);
     assert_eq!(pane.component().get_clicks(), 1);
+}
+
+#[test]
+fn overdue_one_shot_timer_wakes_and_renders_a_static_pane() {
+    let mut rt = Runtime::new().unwrap();
+    rt.set_frame_rate(1000);
+    let mut pane = rt.create_pane(&halfblocks(), Still::new).unwrap();
+    pane.set_area(Rect::new(0, 0, 10, 3));
+    assert!(matches!(rt.next_event(), ratatui_slint::LoopEvent::Wake));
+    assert!(rt.begin_frame());
+    assert!(pane.update());
+    assert_eq!(rt.timeout(), None);
+
+    let weak = pane.component().as_weak();
+    let color = slint::Color::from_rgb_u8(255, 0, 0);
+    slint::Timer::single_shot(Duration::from_millis(1), move || {
+        weak.upgrade().unwrap().set_fill(color);
+    });
+    std::thread::sleep(Duration::from_millis(20));
+    assert_eq!(rt.timeout(), Some(Duration::ZERO));
+    assert!(matches!(
+        rt.next_event_capped(Some(Duration::from_millis(100))),
+        ratatui_slint::LoopEvent::Timeout
+    ));
+    assert_eq!(pane.component().get_fill(), color);
+    assert!(rt.begin_frame());
+    assert!(pane.update());
+    assert_eq!(pane.frames(), 2);
+    assert_eq!(rt.timeout(), None, "completed timer must not busy-loop");
+}
+
+#[test]
+fn moving_an_idle_pane_wakes_without_reencoding() {
+    let mut rt = Runtime::new().unwrap();
+    rt.set_frame_rate(1000);
+    let mut pane = rt.create_pane(&halfblocks(), Still::new).unwrap();
+    pane.set_area(Rect::new(0, 0, 10, 3));
+    assert!(matches!(rt.next_event(), ratatui_slint::LoopEvent::Wake));
+    assert!(rt.begin_frame());
+    assert!(pane.update());
+    assert_eq!(rt.timeout(), None);
+    let moved = Rect::new(2, 1, 10, 3);
+    pane.set_area(moved);
+    assert!(matches!(
+        rt.next_event_capped(Some(Duration::from_millis(100))),
+        ratatui_slint::LoopEvent::Wake
+    ));
+    std::thread::sleep(Duration::from_millis(2));
+    assert!(rt.begin_frame());
+    assert!(pane.update());
+    assert_eq!(pane.frames(), 1);
+    let mut term = test_terminal(14, 5);
+    term.draw(|f| f.render_stateful_widget(SlintWidget, moved, &mut pane))
+        .unwrap();
+    assert_eq!(painted_cells(term.backend().buffer(), moved), 30);
+}
+
+#[test]
+fn dropping_before_a_replacement_draw_deletes_retired_kitty_images() {
+    let rt = Runtime::new().unwrap();
+    let mut pane = rt
+        .create_pane(&picker(ProtocolType::Kitty), Still::new)
+        .unwrap();
+    pane.set_encode_mode(EncodeMode::Inline);
+    pane.set_kitty_ids(ratatui_slint::KittyIds::Fresh);
+    let area = Rect::new(0, 0, 8, 2);
+    pane.set_area(area);
+    assert!(pane.update());
+    let mut term = test_terminal(8, 2);
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
+        .unwrap();
+    let first = kitty_id_of_first_cell(&term);
+    pane.component()
+        .set_fill(slint::Color::from_rgb_u8(255, 0, 0));
+    assert!(pane.update());
+    pane.component()
+        .set_fill(slint::Color::from_rgb_u8(0, 0, 255));
+    assert!(pane.update());
+    let mut out = Vec::new();
+    rt.write_pending_output(&mut out).unwrap();
+    assert!(out.is_empty(), "old image must survive until draw or drop");
+    drop(pane);
+    rt.write_pending_output(&mut out).unwrap();
+    let out = String::from_utf8(out).unwrap();
+    assert!(out.contains(&format!("\x1b_Ga=d,d=I,i={first},q=2\x1b\\")));
+    assert_eq!(
+        out.matches("a=d,d=I").count(),
+        3,
+        "all accepted IDs must be deleted"
+    );
 }

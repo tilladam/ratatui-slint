@@ -72,12 +72,20 @@ pub fn test_terminal(w: u16, h: u16) -> Terminal<TestBackend> {
 
 /// A real crossterm backend writing into memory, with a byte counter. Fixed viewport, so it never
 /// queries the (absent) terminal for its size.
-pub fn counting_terminal(w: u16, h: u16) -> (Terminal<CrosstermBackend<CountingWriter<Vec<u8>>>>, ByteCounter) {
+pub fn counting_terminal(
+    w: u16,
+    h: u16,
+) -> (
+    Terminal<CrosstermBackend<CountingWriter<Vec<u8>>>>,
+    ByteCounter,
+) {
     let writer = CountingWriter::new(Vec::new());
     let counter = writer.counter();
     let term = Terminal::with_options(
         CrosstermBackend::new(writer),
-        TerminalOptions { viewport: Viewport::Fixed(Rect::new(0, 0, w, h)) },
+        TerminalOptions {
+            viewport: Viewport::Fixed(Rect::new(0, 0, w, h)),
+        },
     )
     .unwrap();
     (term, counter)

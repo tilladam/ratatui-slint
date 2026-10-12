@@ -30,15 +30,20 @@ fn still_component_halfblocks_snapshot() {
     pane.set_area(area);
     assert!(pane.update());
     let mut term = test_terminal(8, 3);
-    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane)).unwrap();
+    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
+        .unwrap();
     let actual = render_cells(term.backend().buffer(), area);
 
-    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/snapshots/still_halfblocks.txt");
-    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() || !path.exists() {
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("tests/snapshots/still_halfblocks.txt");
+    if std::env::var_os("UPDATE_SNAPSHOTS").is_some() {
         std::fs::write(&path, &actual).unwrap();
         eprintln!("wrote {}", path.display());
         return;
     }
     let expected = std::fs::read_to_string(&path).unwrap();
-    assert_eq!(actual, expected, "half-block output changed; rerun with UPDATE_SNAPSHOTS=1 if intended");
+    assert_eq!(
+        actual, expected,
+        "half-block output changed; rerun with UPDATE_SNAPSHOTS=1 if intended"
+    );
 }

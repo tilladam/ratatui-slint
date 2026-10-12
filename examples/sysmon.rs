@@ -113,7 +113,12 @@ impl Sampler {
         self.sys.refresh_memory();
         self.sys.refresh_processes(ProcessesToUpdate::All, true);
 
-        let cores: Vec<f32> = self.sys.cpus().iter().map(|c| c.cpu_usage() / 100.0).collect();
+        let cores: Vec<f32> = self
+            .sys
+            .cpus()
+            .iter()
+            .map(|c| c.cpu_usage() / 100.0)
+            .collect();
         let avg = cores.iter().sum::<f32>() / cores.len().max(1) as f32;
         let model = ui.get_cores();
         if model.row_count() == cores.len() {
@@ -164,8 +169,11 @@ fn history_paths(history: &VecDeque<f32>) -> (SharedString, SharedString) {
     }
     let step = 100.0 / (HISTORY - 1) as f32;
     let x0 = 100.0 - step * (history.len() - 1) as f32;
-    let pts: Vec<(f32, f32)> =
-        history.iter().enumerate().map(|(i, v)| (x0 + i as f32 * step, 100.0 - v.clamp(0.0, 1.0) * 96.0 - 2.0)).collect();
+    let pts: Vec<(f32, f32)> = history
+        .iter()
+        .enumerate()
+        .map(|(i, v)| (x0 + i as f32 * step, 100.0 - v.clamp(0.0, 1.0) * 96.0 - 2.0))
+        .collect();
     let mut line = format!("M {:.2} {:.2}", pts[0].0, pts[0].1);
     for (x, y) in &pts[1..] {
         line.push_str(&format!(" L {x:.2} {y:.2}"));
@@ -182,19 +190,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut router = InputRouter::new();
     router.set_keyboard_enhanced(session.keyboard_enhanced);
 
-    let sampler = Rc::new(RefCell::new(Sampler { sys: System::new_all(), history: VecDeque::new(), procs: Vec::new() }));
+    let sampler = Rc::new(RefCell::new(Sampler {
+        sys: System::new_all(),
+        history: VecDeque::new(),
+        procs: Vec::new(),
+    }));
     let table_dirty = Rc::new(Cell::new(true));
     let timer = slint::Timer::default();
     {
         let ui = pane.component().as_weak();
         let (sampler, dirty) = (sampler.clone(), table_dirty.clone());
-        sampler.borrow_mut().sample(&pane.component().clone_strong());
-        timer.start(slint::TimerMode::Repeated, Duration::from_secs(1), move || {
-            if let Some(ui) = ui.upgrade() {
-                sampler.borrow_mut().sample(&ui);
-                dirty.set(true);
-            }
-        });
+        sampler
+            .borrow_mut()
+            .sample(&pane.component().clone_strong());
+        timer.start(
+            slint::TimerMode::Repeated,
+            Duration::from_secs(1),
+            move || {
+                if let Some(ui) = ui.upgrade() {
+                    sampler.borrow_mut().sample(&ui);
+                    dirty.set(true);
+                }
+            },
+        );
     }
 
     let mut table = TableState::default().with_selected(Some(0));
@@ -206,7 +224,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             LoopEvent::Quit => return Ok(()),
             LoopEvent::Terminal(ev) => {
                 if let Event::Resize(..) = ev
-                    && pane.protocol_type() != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
+                    && pane.protocol_type()
+                        != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
                     && let Some(font) = ratatui_slint::terminal::cell_size()
                 {
                     pane.set_font_size(font); // font zoom changes pixels per cell
@@ -221,7 +240,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         KeyCode::Char('q') => return Ok(()),
                         KeyCode::Char('p') => {
                             paused = !paused;
-                            if paused { timer.stop() } else { timer.restart() }
+                            if paused {
+                                timer.stop()
+                            } else {
+                                timer.restart()
+                            }
                             pane.component().set_paused(paused);
                         }
                         KeyCode::Down => table.select_next(),
@@ -237,8 +260,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             continue;
         }
         let size = session.terminal.size()?;
-        let [main, status] = Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(Rect::from(size));
-        let [left, right] = Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)]).areas(main);
+        let [main, status] =
+            Layout::vertical([Constraint::Min(5), Constraint::Length(1)]).areas(Rect::from(size));
+        let [left, right] =
+            Layout::horizontal([Constraint::Percentage(45), Constraint::Percentage(55)])
+                .areas(main);
         let block = Block::default().borders(Borders::ALL).title(" Slint ");
         let inner = block.inner(right);
         pane.set_area(inner);
@@ -246,10 +272,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if pane_changed {
             frames += 1;
         }
-        if !(pane_changed || table_dirty.replace(false)) {
+        let table_changed = table_dirty.replace(false);
+        if !(pane_changed || table_changed) {
             continue;
         }
-        let focus = if router.focused().is_some() { "pane focused (Ctrl+G leaves)" } else { "click pane to focus" };
+        let focus = if router.focused().is_some() {
+            "pane focused (Ctrl+G leaves)"
+        } else {
+            "click pane to focus"
+        };
         let fps = frames as f64 / started.elapsed().as_secs_f64().max(0.001);
         let status_line = format!(
             " {:?} | {fps:.1} fps | {} B/s to terminal | {focus} | p pause, q quit",
@@ -266,14 +297,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     TCell::from(format!("{:6}", p.mem_mb)),
                 ])
             });
-            let t = Table::new(rows, [Constraint::Length(7), Constraint::Min(10), Constraint::Length(6), Constraint::Length(7)])
-                .header(Row::new(vec!["PID", "NAME", "CPU%", "MEM MB"]).style(Style::default().add_modifier(Modifier::BOLD)))
-                .row_highlight_style(Style::default().bg(Color::DarkGray))
-                .block(Block::default().borders(Borders::ALL).title(" Processes "));
+            let t = Table::new(
+                rows,
+                [
+                    Constraint::Length(7),
+                    Constraint::Min(10),
+                    Constraint::Length(6),
+                    Constraint::Length(7),
+                ],
+            )
+            .header(
+                Row::new(vec!["PID", "NAME", "CPU%", "MEM MB"])
+                    .style(Style::default().add_modifier(Modifier::BOLD)),
+            )
+            .row_highlight_style(Style::default().bg(Color::DarkGray))
+            .block(Block::default().borders(Borders::ALL).title(" Processes "));
             f.render_stateful_widget(t, left, &mut table);
             f.render_widget(block, right);
             f.render_stateful_widget(SlintWidget, inner, &mut pane);
-            f.render_widget(Paragraph::new(Line::from(status_line.clone())).style(Style::default().fg(Color::Gray)), status);
+            f.render_widget(
+                Paragraph::new(Line::from(status_line.clone()))
+                    .style(Style::default().fg(Color::Gray)),
+                status,
+            );
         })?;
         rt.write_pending_output(session.terminal.backend_mut())?;
     })();

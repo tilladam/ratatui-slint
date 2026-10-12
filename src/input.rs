@@ -115,7 +115,13 @@ pub fn key_text(code: KeyCode) -> Option<SharedString> {
 
 /// Converts a cell to a logical position at the cell centre, relative to `area`. Works for cells
 /// outside the area (negative offsets), which captured drags need.
-pub fn cell_to_logical(area: Rect, font: ratatui_image::FontSize, scale_factor: f32, col: u16, row: u16) -> LogicalPosition {
+pub fn cell_to_logical(
+    area: Rect,
+    font: ratatui_image::FontSize,
+    scale_factor: f32,
+    col: u16,
+    row: u16,
+) -> LogicalPosition {
     let x = (f32::from(col) - f32::from(area.x) + 0.5) * f32::from(font.width);
     let y = (f32::from(row) - f32::from(area.y) + 0.5) * f32::from(font.height);
     LogicalPosition::new(x / scale_factor, y / scale_factor)
@@ -191,7 +197,8 @@ impl InputRouter {
         }
         self.blur(panes);
         if let Some(p) = find(panes, id) {
-            p.slint_window().dispatch_event(WindowEvent::WindowActiveChanged(true));
+            p.slint_window()
+                .dispatch_event(WindowEvent::WindowActiveChanged(true));
             self.focused = Some(id);
         }
     }
@@ -202,7 +209,8 @@ impl InputRouter {
             && let Some(p) = find(panes, old)
         {
             self.release_modifiers(p);
-            p.slint_window().dispatch_event(WindowEvent::WindowActiveChanged(false));
+            p.slint_window()
+                .dispatch_event(WindowEvent::WindowActiveChanged(false));
         }
     }
 
@@ -214,7 +222,10 @@ impl InputRouter {
                 *slot = None;
             }
         }
-        if self.captured.is_some_and(|(id, _)| find(panes, id).is_none()) {
+        if self
+            .captured
+            .is_some_and(|(id, _)| find(panes, id).is_none())
+        {
             self.captured = None;
         }
         match event {
@@ -224,13 +235,15 @@ impl InputRouter {
             Event::FocusLost => {
                 if let Some(p) = self.focused.and_then(|id| find(panes, id)) {
                     self.release_modifiers(p);
-                    p.slint_window().dispatch_event(WindowEvent::WindowActiveChanged(false));
+                    p.slint_window()
+                        .dispatch_event(WindowEvent::WindowActiveChanged(false));
                 }
                 Routed::Unhandled
             }
             Event::FocusGained => {
                 if let Some(p) = self.focused.and_then(|id| find(panes, id)) {
-                    p.slint_window().dispatch_event(WindowEvent::WindowActiveChanged(true));
+                    p.slint_window()
+                        .dispatch_event(WindowEvent::WindowActiveChanged(true));
                 }
                 Routed::Unhandled
             }
@@ -239,13 +252,19 @@ impl InputRouter {
     }
 
     fn route_key(&mut self, k: &KeyEvent, panes: &[&dyn PaneInput]) -> Routed {
-        let Some(id) = self.focused else { return Routed::Unhandled };
-        let Some(pane) = find(panes, id) else { return Routed::Unhandled };
+        let Some(id) = self.focused else {
+            return Routed::Unhandled;
+        };
+        let Some(pane) = find(panes, id) else {
+            return Routed::Unhandled;
+        };
         if k.kind == KeyEventKind::Press && self.exit_key.is_some_and(|b| b.matches(k)) {
             self.blur(panes);
             return Routed::FocusReleased(id);
         }
-        let Some(text) = key_text(k.code) else { return Routed::Unhandled };
+        let Some(text) = key_text(k.code) else {
+            return Routed::Unhandled;
+        };
         let window = pane.slint_window();
 
         if let KeyCode::Modifier(_) = k.code {
@@ -261,7 +280,8 @@ impl InputRouter {
         let result = match k.kind {
             KeyEventKind::Press => {
                 self.sync_modifiers(pane, k.modifiers);
-                let r = window.dispatch_event_with_result(WindowEvent::KeyPressed { text: text.clone() });
+                let r = window
+                    .dispatch_event_with_result(WindowEvent::KeyPressed { text: text.clone() });
                 if !self.keyboard_enhanced {
                     window.dispatch_event(WindowEvent::KeyReleased { text });
                     self.release_modifiers(pane);
@@ -296,7 +316,11 @@ impl InputRouter {
                 window.dispatch_event(WindowEvent::KeyReleased { text: key.into() });
             }
         }
-        self.held = wanted & (KeyModifiers::SHIFT | KeyModifiers::CONTROL | KeyModifiers::ALT | KeyModifiers::SUPER);
+        self.held = wanted
+            & (KeyModifiers::SHIFT
+                | KeyModifiers::CONTROL
+                | KeyModifiers::ALT
+                | KeyModifiers::SUPER);
     }
 
     fn release_modifiers(&mut self, pane: &dyn PaneInput) {
@@ -304,7 +328,9 @@ impl InputRouter {
     }
 
     fn route_paste(&mut self, text: &str, panes: &[&dyn PaneInput]) -> Routed {
-        let Some(pane) = self.focused.and_then(|id| find(panes, id)) else { return Routed::Unhandled };
+        let Some(pane) = self.focused.and_then(|id| find(panes, id)) else {
+            return Routed::Unhandled;
+        };
         if !crate::platform::set_clipboard_cache(text.to_owned()) {
             return Routed::Unhandled;
         }
@@ -324,13 +350,23 @@ impl InputRouter {
         let (col, row) = (m.column, m.row);
         let hit = panes.iter().find(|p| contains(p.area(), col, row)).copied();
         let pos = |p: &dyn PaneInput| {
-            cell_to_logical(p.area(), p.font_size(), p.slint_window().scale_factor(), col, row)
+            cell_to_logical(
+                p.area(),
+                p.font_size(),
+                p.slint_window().scale_factor(),
+                col,
+                row,
+            )
         };
 
         match m.kind {
             MouseEventKind::Down(b) => {
                 if let Some(p) = self.captured.and_then(|(id, _)| find(panes, id)) {
-                    p.slint_window().dispatch_event(WindowEvent::PointerPressed { position: pos(p), button: button(b) });
+                    p.slint_window()
+                        .dispatch_event(WindowEvent::PointerPressed {
+                            position: pos(p),
+                            button: button(b),
+                        });
                     return Routed::Consumed;
                 }
                 match hit {
@@ -338,7 +374,11 @@ impl InputRouter {
                         self.focus(p.id(), panes);
                         self.set_hover(Some(p), panes);
                         self.captured = Some((p.id(), b));
-                        p.slint_window().dispatch_event(WindowEvent::PointerPressed { position: pos(p), button: button(b) });
+                        p.slint_window()
+                            .dispatch_event(WindowEvent::PointerPressed {
+                                position: pos(p),
+                                button: button(b),
+                            });
                         Routed::Consumed
                     }
                     None => {
@@ -347,8 +387,14 @@ impl InputRouter {
                         if let Some(p) = self.focused.and_then(|id| find(panes, id)) {
                             let position = pos(p);
                             let w = p.slint_window();
-                            w.dispatch_event(WindowEvent::PointerPressed { position, button: button(b) });
-                            w.dispatch_event(WindowEvent::PointerReleased { position, button: button(b) });
+                            w.dispatch_event(WindowEvent::PointerPressed {
+                                position,
+                                button: button(b),
+                            });
+                            w.dispatch_event(WindowEvent::PointerReleased {
+                                position,
+                                button: button(b),
+                            });
                             w.dispatch_event(WindowEvent::PointerExited);
                         }
                         self.blur(panes);
@@ -362,7 +408,10 @@ impl InputRouter {
                     && let Some(p) = find(panes, id)
                 {
                     let w = p.slint_window();
-                    w.dispatch_event(WindowEvent::PointerReleased { position: pos(p), button: button(b) });
+                    w.dispatch_event(WindowEvent::PointerReleased {
+                        position: pos(p),
+                        button: button(b),
+                    });
                     if held == b {
                         self.captured = None;
                         if !contains(p.area(), col, row) {
@@ -377,7 +426,11 @@ impl InputRouter {
                 }
                 match hit {
                     Some(p) => {
-                        p.slint_window().dispatch_event(WindowEvent::PointerReleased { position: pos(p), button: button(b) });
+                        p.slint_window()
+                            .dispatch_event(WindowEvent::PointerReleased {
+                                position: pos(p),
+                                button: button(b),
+                            });
                         Routed::Consumed
                     }
                     None => Routed::Unhandled,
@@ -386,7 +439,8 @@ impl InputRouter {
             MouseEventKind::Drag(_) => {
                 if let Some(p) = self.captured.and_then(|(id, _)| find(panes, id)) {
                     // Leaving during a drag is not an exit: Slint keeps its grab.
-                    p.slint_window().dispatch_event(WindowEvent::PointerMoved { position: pos(p) });
+                    p.slint_window()
+                        .dispatch_event(WindowEvent::PointerMoved { position: pos(p) });
                     return Routed::Consumed;
                 }
                 self.route_move(hit, panes, pos)
@@ -396,7 +450,9 @@ impl InputRouter {
             | MouseEventKind::ScrollDown
             | MouseEventKind::ScrollLeft
             | MouseEventKind::ScrollRight => {
-                let Some(p) = hit else { return Routed::Unhandled };
+                let Some(p) = hit else {
+                    return Routed::Unhandled;
+                };
                 let font = p.font_size();
                 let sf = p.slint_window().scale_factor();
                 let dy = self.scroll_lines * f32::from(font.height) / sf;
@@ -407,7 +463,12 @@ impl InputRouter {
                     MouseEventKind::ScrollLeft => (dx, 0.0),
                     _ => (-dx, 0.0),
                 };
-                p.slint_window().dispatch_event(WindowEvent::PointerScrolled { position: pos(p), delta_x, delta_y });
+                p.slint_window()
+                    .dispatch_event(WindowEvent::PointerScrolled {
+                        position: pos(p),
+                        delta_x,
+                        delta_y,
+                    });
                 Routed::Consumed
             }
         }
@@ -422,7 +483,8 @@ impl InputRouter {
         self.set_hover(hit, panes);
         match hit {
             Some(p) => {
-                p.slint_window().dispatch_event(WindowEvent::PointerMoved { position: pos(p) });
+                p.slint_window()
+                    .dispatch_event(WindowEvent::PointerMoved { position: pos(p) });
                 Routed::Consumed
             }
             None => Routed::Unhandled,
@@ -435,7 +497,8 @@ impl InputRouter {
             if let Some(old) = self.hovered.and_then(|id| find(panes, id))
                 && self.captured.is_none_or(|(id, _)| id != old.id())
             {
-                old.slint_window().dispatch_event(WindowEvent::PointerExited);
+                old.slint_window()
+                    .dispatch_event(WindowEvent::PointerExited);
             }
             self.hovered = new;
         }

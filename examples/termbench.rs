@@ -31,14 +31,23 @@ slint::slint! {
 }
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let seconds: u64 = std::env::args().nth(1).and_then(|s| s.parse().ok()).unwrap_or(5);
+    let seconds: u64 = std::env::args()
+        .nth(1)
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5);
     let mut rt = Runtime::new()?;
     rt.set_frame_rate(60);
     let mut session = TerminalSession::init(TerminalOptions::default())?;
     rt.spawn_terminal_reader();
     let mut pane = rt.create_pane(&session.picker, Bench::new)?;
 
-    let (mut frames, mut render, mut snapshot, mut encode, mut write) = (0u32, Duration::ZERO, Duration::ZERO, Duration::ZERO, Duration::ZERO);
+    let (mut frames, mut render, mut snapshot, mut encode, mut write) = (
+        0u32,
+        Duration::ZERO,
+        Duration::ZERO,
+        Duration::ZERO,
+        Duration::ZERO,
+    );
     let mut max_write = Duration::ZERO;
     let start_bytes = session.bytes.get();
     let started = Instant::now();
@@ -54,7 +63,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if pane.update() {
             let s = pane.stats();
             let t = Instant::now();
-            session.terminal.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
+            session
+                .terminal
+                .draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
             rt.write_pending_output(session.terminal.backend_mut())?;
             let w = t.elapsed();
             frames += 1;
@@ -76,11 +87,34 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let n = f64::from(frames.max(1));
     let ms = |d: Duration| d.as_secs_f64() * 1e3 / n;
-    println!("terminal   {}", std::env::var("TERM_PROGRAM").unwrap_or_else(|_| std::env::var("TERM").unwrap_or_default()));
-    println!("protocol   {protocol:?}, cell {}x{} px, scale {scale:.2}", font.width, font.height);
-    println!("pane       {}x{} cells, {:?} px", cells.width, cells.height, px);
-    println!("frames     {frames} in {elapsed:.1} s = {:.1} fps (cap 60)", f64::from(frames) / elapsed);
-    println!("per frame  render {:.2} ms, snapshot {:.2} ms, encode {:.2} ms, write {:.2} ms (max {:.1} ms)", ms(render), ms(snapshot), ms(encode), ms(write), max_write.as_secs_f64() * 1e3);
-    println!("output     {:.2} MB/frame, {:.1} MB/s", bytes as f64 / n / 1e6, bytes as f64 / elapsed / 1e6);
+    println!(
+        "terminal   {}",
+        std::env::var("TERM_PROGRAM").unwrap_or_else(|_| std::env::var("TERM").unwrap_or_default())
+    );
+    println!(
+        "protocol   {protocol:?}, cell {}x{} px, scale {scale:.2}",
+        font.width, font.height
+    );
+    println!(
+        "pane       {}x{} cells, {:?} px",
+        cells.width, cells.height, px
+    );
+    println!(
+        "frames     {frames} in {elapsed:.1} s = {:.1} fps (cap 60)",
+        f64::from(frames) / elapsed
+    );
+    println!(
+        "per frame  render {:.2} ms, snapshot {:.2} ms, encode {:.2} ms, write {:.2} ms (max {:.1} ms)",
+        ms(render),
+        ms(snapshot),
+        ms(encode),
+        ms(write),
+        max_write.as_secs_f64() * 1e3
+    );
+    println!(
+        "output     {:.2} MB/frame, {:.1} MB/s",
+        bytes as f64 / n / 1e6,
+        bytes as f64 / elapsed / 1e6
+    );
     Ok(())
 }
