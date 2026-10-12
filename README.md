@@ -9,9 +9,51 @@ sixel, iTerm2 or half-block output. The ratatui loop drives Slint's timers, anim
 rendering, and Slint never runs its own event loop. Mouse and keyboard input goes to the pane
 under the pointer or in focus, and keys Slint rejects fall back to ratatui.
 
-Status: pre-release. All headless tests pass, and every example passes scripted checks under a
-simulated terminal. It has not yet been tested across real terminals or tmux. See
-[PLAN.md](PLAN.md) for the design, measurements and what is still open.
+Status: pre-release. The headless tests pass, and every example passes scripted checks under a
+simulated terminal. The examples have been run by hand in kitty, Ghostty, WezTerm, iTerm2 and
+Terminal.app. tmux and SSH are untested. See [PLAN.md](PLAN.md) for the design, measurements
+and what is still open.
+
+## Try it
+
+Clone the repository and run the examples from its root:
+
+```sh
+cargo run --release --example hello            # one pane filling the terminal
+cargo run --release --example sysmon           # process table + animated Slint gauges
+cargo run --release --example device_console   # ops console around a live touch panel
+cargo run --release -p live-preview            # hot-reloading preview; add -- path/to/ui.slint
+```
+
+Click a Slint pane to give it the keyboard, and press Ctrl+G to leave it. `q` quits when no pane
+has focus. Each example's keys are listed at the top of its source file in `examples/`.
+
+| Example | Shows |
+|---|---|
+| `hello` | The smallest complete app. Click the pane, then press `+`/`-`. |
+| `sysmon` | A ratatui process table beside Slint per-core gauges, a memory gauge and a CPU graph. `p` pauses sampling: the bytes/s counter drops to zero while idle. |
+| `device_console` | An 800 × 480 touch-panel UI scaled into a pane with `Scale::Fit`, inside a ratatui console with logs and a config editor. |
+| `live-preview` | Recompiles a `.slint` file on save and swaps it in. Without a path it shows a bundled demo. `s` cycles the scale, `r` reloads. |
+| `termbench` | Runs an animated pane full screen for 5 seconds, then prints fps, per-frame costs and bytes written. |
+| `bench` | Per-protocol encode cost and output size, written to memory, so no terminal is needed. |
+
+The `spike/` directory holds the original single-file prototype. It is kept for reference only
+and is not maintained; use the examples above instead.
+
+### Terminals
+
+The protocol is detected at startup.
+
+| Terminal | Protocol | Full-screen `termbench` |
+|---|---|---|
+| kitty | kitty | works |
+| Ghostty | kitty, compressed | 33 fps, measured before a later speed-up; smooth since, not re-measured |
+| WezTerm | iTerm2 (sixel also works when forced) | 60 fps at 80×24; forced sixel 54 fps |
+| iTerm2 | iTerm2 | 14 fps, limited by iTerm2's image decoding |
+| Terminal.app | half-blocks | 60 fps, at low resolution |
+
+These numbers were measured once each on a single Mac with a Retina display, so treat them as
+rough. Run `termbench` to measure your own terminal.
 
 ## Usage
 
@@ -76,24 +118,15 @@ Key points:
 - **Font zoom.** On `Event::Resize`, pass `terminal::cell_size()` to `SlintPane::set_font_size`
   so panes follow a changed cell size.
 
+The library requires Rust 1.92 or newer. The system-monitor examples use `sysinfo` and require
+Rust 1.95 or newer; use the current stable toolchain for development and the full test suite.
+
 Cargo features:
 
 - `image-decoders` (default) decodes PNG, JPEG and SVG images in `.slint` files, including the
   std-widgets icons.
 - `transparency` renders with alpha. Kitty and iTerm2 keep it, and the other protocols composite
   over `SlintPane::set_background`.
-
-## Examples
-
-```sh
-cargo run --release --example hello            # one pane, smallest complete app
-cargo run --release --example sysmon           # process table + animated Slint gauges
-cargo run --release --example device_console   # ops console around a live touch panel
-cargo run --release -p live-preview -- ui.slint # hot-reloading .slint preview
-cargo run --release --example bench            # per-protocol cost, bytes at the writer
-```
-
-Use kitty, Ghostty or WezTerm for full quality. Other terminals fall back to sixel or half-blocks.
 
 ## Testing
 
