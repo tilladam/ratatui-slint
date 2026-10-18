@@ -232,7 +232,7 @@ impl Runtime {
             if owns_proxy {
                 PROXY_CLAIMED.store(false, Ordering::SeqCst);
             }
-            return Err(Error::Platform(format!("{e:?}")));
+            return Err(Error::Platform(e));
         }
         CURRENT.with(|c| *c.borrow_mut() = Rc::downgrade(&shared));
         Ok(Self {
@@ -273,21 +273,14 @@ impl Runtime {
         E: std::fmt::Display,
     {
         let component = factory().map_err(|e| Error::Component(e.to_string()))?;
-        component
-            .show()
-            .map_err(|e| Error::Component(e.to_string()))?;
+        component.show().map_err(Error::Window)?;
         let Some(window) = self.shared.find_window(component.window()) else {
             let _ = component.hide();
             return Err(Error::Component(
                 "component window was not created by this runtime's platform".into(),
             ));
         };
-        Ok(SlintPane::new(
-            component,
-            window,
-            picker.clone(),
-            self.waker(),
-        ))
+        SlintPane::new(component, window, picker.clone(), self.waker())
     }
 
     /// Number of Slint windows still alive. Zero once every pane has been dropped.
@@ -447,9 +440,10 @@ impl Runtime {
             .is_some_and(|w| w.window().has_active_animations())
     }
 
-    /// Writes queued terminal output to `out`: OSC 52 clipboard copies and deletion of kitty
-    /// images that a newer frame replaced. Call after every `terminal.draw`, with the same writer
-    /// the terminal backend uses; skipping it lets replaced kitty images pile up in the terminal.
+    /// Writes queued clipboard sequences, Kitty uploads, and image deletions to `out`.
+    /// Call after every `terminal.draw`, using the terminal backend's writer. Skipping this
+    /// leaves Kitty images unuploaded and replaced images allocated in the terminal.
+    /// Treat write failures as fatal, or explicitly invalidate panes before trying to recover.
     pub fn write_pending_output(&self, out: &mut impl Write) -> std::io::Result<()> {
         let bytes = std::mem::take(&mut *self.shared.pending_output.borrow_mut());
         if !bytes.is_empty() {

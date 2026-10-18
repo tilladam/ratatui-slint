@@ -16,6 +16,7 @@ use crate::platform::Waker;
 
 /// Where encoding runs.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum EncodeMode {
     /// Worker thread for sixel, kitty and iTerm2; inline for half-blocks. The default.
     #[default]
@@ -92,20 +93,38 @@ pub(crate) enum Displayed {
     Stateful(StatefulProtocol),
     /// An escape sequence encoded here (iTerm2 and sixel), drawn from the area's first cell.
     Raw { data: String, cells: Size },
+    /// The upload is separate from placeholders so later widgets cannot erase it.
+    Kitty {
+        protocol: StatefulProtocol,
+        upload: Option<String>,
+    },
 }
 
 impl Displayed {
     /// The cell size the frame was encoded for.
     pub fn cells(&self) -> Size {
         match self {
-            Displayed::Stateful(p) => p.size_for(Resize::Fit(None), Size::new(u16::MAX, u16::MAX)),
+            Displayed::Stateful(p) | Displayed::Kitty { protocol: p, .. } => {
+                p.size_for(Resize::Fit(None), Size::new(u16::MAX, u16::MAX))
+            }
             Displayed::Raw { cells, .. } => *cells,
         }
     }
 
-    pub fn render(&mut self, area: ratatui::layout::Rect, buf: &mut ratatui::buffer::Buffer) {
+    pub fn render(
+        &mut self,
+        area: ratatui::layout::Rect,
+        buf: &mut ratatui::buffer::Buffer,
+        damage: bool,
+    ) {
         match self {
             Displayed::Stateful(p) => p.render(area, buf),
+            Displayed::Kitty { protocol, upload } => {
+                protocol.render(area, buf);
+                if let Some(upload) = upload.take() {
+                    crate::platform::queue_output(upload.as_bytes());
+                }
+            }
             Displayed::Raw { data, cells } => {
                 use ratatui::buffer::CellDiffOption;
                 let w = cells.width.min(area.width);
@@ -116,6 +135,11 @@ impl Displayed {
                             continue;
                         };
                         if (x, y) == (area.x, area.y) {
+                            cell.set_fg(if damage {
+                                ratatui::style::Color::Black
+                            } else {
+                                ratatui::style::Color::Reset
+                            });
                             cell.set_symbol(data)
                                 .set_diff_option(CellDiffOption::ForcedWidth(
                                     std::num::NonZeroU16::MIN,
@@ -150,11 +174,7 @@ pub(crate) fn sixel_sequence(image: &DynamicImage, tmux: bool) -> Result<String,
         &icy_sixel::EncodeOptions::default(),
     )
     .map_err(|e| format!("sixel encoding error: {e}"))?;
-    Ok(if tmux {
-        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
-    } else {
-        seq
-    })
+    Ok(crate::output::passthrough(seq, tmux))
 }
 
 /// The iTerm2 inline-image sequence for `image`, sized to `cells`.
@@ -179,18 +199,14 @@ pub(crate) fn iterm2_sequence(
         cells.width,
         cells.height,
     );
-    Ok(if tmux {
-        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
-    } else {
-        seq
-    })
+    Ok(crate::output::passthrough(seq, tmux))
 }
 
 pub(crate) struct Job {
     pub generation: u64,
     pub size: Size,
     pub frame: Frame,
-    /// Kitty image id of this frame; `Some(0)` for the pane's stable id, `None` for other protocols.
+    /// Kitty image id of this frame; `None` for other protocols.
     pub kitty_id: Option<u32>,
 }
 
@@ -202,10 +218,13 @@ pub(crate) struct Done {
     pub kitty_id: Option<u32>,
 }
 
-fn encode(job: Job) -> Option<Done> {
+fn encode(job: Job) -> Result<Done, String> {
     use ratatui_image::protocol::StatefulProtocolType;
     let start = std::time::Instant::now();
-    let image = job.frame.to_image()?;
+    let image = job
+        .frame
+        .to_image()
+        .ok_or("invalid framebuffer dimensions")?;
     let (protocol, error) = match job.frame.protocol_type {
         StatefulProtocolType::ITerm2(iterm2) => {
             match iterm2_sequence(&image, job.size, iterm2.is_tmux) {
@@ -251,10 +270,31 @@ fn encode(job: Job) -> Option<Done> {
                 .last_encoding_result()
                 .and_then(|r| r.err())
                 .map(|e| e.to_string());
-            (Displayed::Stateful(protocol), error)
+            let displayed = if job.kitty_id.is_some() && error.is_none() {
+                // ratatui-image exposes the upload only on first render. Consume it into
+                // a scratch cell on the encoder thread; future renders produce placeholders
+                // only. Keep the upload outside the ratatui diff/composition pipeline.
+                let area = ratatui::layout::Rect::new(0, 0, 1, 1);
+                let mut scratch = ratatui::buffer::Buffer::empty(area);
+                protocol.render(area, &mut scratch);
+                let (upload, _) = scratch[(0, 0)]
+                    .symbol()
+                    .split_once('\u{10eeee}')
+                    .ok_or("kitty encoder did not produce an upload/placeholder pair")?;
+                if upload.is_empty() {
+                    return Err("kitty encoder produced an empty upload".into());
+                }
+                Displayed::Kitty {
+                    protocol,
+                    upload: Some(upload.to_owned()),
+                }
+            } else {
+                Displayed::Stateful(protocol)
+            };
+            (displayed, error)
         }
     };
-    Some(Done {
+    Ok(Done {
         generation: job.generation,
         protocol,
         error,
@@ -270,18 +310,19 @@ pub(crate) struct Slot {
 
 pub(crate) enum Encoder {
     Inline {
-        done: Option<Box<Done>>,
+        done: Option<Box<Result<Done, String>>>,
     },
     Threaded {
         slot: Arc<(Mutex<Slot>, Condvar)>,
-        rx: Receiver<Done>,
+        rx: Receiver<Result<Done, String>>,
+        failure: Option<String>,
     },
 }
 
 impl Encoder {
-    pub fn new(threaded: bool, waker: Waker) -> Self {
+    pub fn new(threaded: bool, waker: Waker) -> std::io::Result<Self> {
         if !threaded {
-            return Encoder::Inline { done: None };
+            return Ok(Encoder::Inline { done: None });
         }
         let slot = Arc::new((
             Mutex::new(Slot {
@@ -290,57 +331,118 @@ impl Encoder {
             }),
             Condvar::new(),
         ));
-        let (tx, rx): (Sender<Done>, Receiver<Done>) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         let worker_slot = slot.clone();
         std::thread::Builder::new()
             .name("ratatui-slint-encode".into())
             .spawn(move || {
-                let (lock, cvar) = &*worker_slot;
-                loop {
-                    let job = {
-                        let mut s = lock.lock().unwrap();
-                        while s.job.is_none() && !s.stop {
-                            s = cvar.wait(s).unwrap();
-                        }
-                        if s.stop {
-                            return;
-                        }
-                        s.job.take().unwrap()
-                    };
-                    let Some(done) = encode(job) else { continue };
-                    if tx.send(done).is_err() {
-                        return;
-                    }
-                    waker.wake();
-                }
-            })
-            .expect("spawn encoder thread");
-        Encoder::Threaded { slot, rx }
+                worker_boundary(&worker_slot, &tx, &waker, || {
+                    encode_worker(&worker_slot, &tx, &waker)
+                });
+            })?;
+        Ok(Encoder::Threaded {
+            slot,
+            rx,
+            failure: None,
+        })
     }
 
     /// Queues a frame, replacing any frame that has not started encoding.
-    pub fn submit(&mut self, job: Job) {
+    pub fn submit(&mut self, job: Job) -> Result<(), String> {
         match self {
-            Encoder::Inline { done } => *done = encode(job).map(Box::new),
-            Encoder::Threaded { slot, .. } => {
+            Encoder::Inline { done } => *done = Some(Box::new(encode(job))),
+            Encoder::Threaded { slot, failure, .. } => {
+                if let Some(error) = failure {
+                    return Err(error.clone());
+                }
                 let (lock, cvar) = &**slot;
-                lock.lock().unwrap().job = Some(job);
+                let mut s = lock.lock().map_err(|_| "encoder state poisoned")?;
+                if s.stop {
+                    return Err("encoder worker stopped".into());
+                }
+                s.job = Some(job);
                 cvar.notify_one();
             }
         }
+        Ok(())
     }
 
-    /// The newest finished frame for `generation`, if any. Older generations are discarded.
-    pub fn take_latest(&mut self, generation: u64) -> Option<Done> {
+    /// Newest finished frame for this generation; terminal worker errors are never discarded.
+    pub fn take_latest(&mut self, generation: u64) -> Result<Option<Done>, String> {
         match self {
             Encoder::Inline { done } => done
                 .take()
-                .filter(|d| d.generation == generation)
-                .map(|d| *d),
-            Encoder::Threaded { rx, .. } => {
-                rx.try_iter().filter(|d| d.generation == generation).last()
+                .map(|done| *done)
+                .transpose()
+                .map(|done| done.filter(|d| d.generation == generation)),
+            Encoder::Threaded { rx, failure, .. } => {
+                if let Some(error) = failure {
+                    return Err(error.clone());
+                }
+                let mut newest = None;
+                loop {
+                    match rx.try_recv() {
+                        Ok(done) => {
+                            let done = done.inspect_err(|error| {
+                                *failure = Some(error.clone());
+                            })?;
+                            if done.generation == generation {
+                                newest = Some(done);
+                            }
+                        }
+                        Err(mpsc::TryRecvError::Empty) => return Ok(newest),
+                        Err(mpsc::TryRecvError::Disconnected) => {
+                            let error = "encoder worker disconnected".to_owned();
+                            *failure = Some(error.clone());
+                            return Err(error);
+                        }
+                    }
+                }
             }
         }
+    }
+}
+
+fn worker_boundary(
+    slot: &(Mutex<Slot>, Condvar),
+    tx: &Sender<Result<Done, String>>,
+    waker: &Waker,
+    run: impl FnOnce() -> Result<(), String>,
+) {
+    let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(run));
+    let failure = match result {
+        Ok(Ok(())) => None,
+        Ok(Err(e)) => Some(e),
+        Err(_) => Some("encoder worker panicked".to_owned()),
+    };
+    if let Some(error) = failure {
+        slot.0.lock().unwrap_or_else(|e| e.into_inner()).stop = true;
+        let _ = tx.send(Err(error));
+        waker.wake();
+    }
+}
+
+fn encode_worker(
+    slot: &(Mutex<Slot>, Condvar),
+    tx: &Sender<Result<Done, String>>,
+    waker: &Waker,
+) -> Result<(), String> {
+    let (lock, cvar) = slot;
+    loop {
+        let job = {
+            let mut s = lock.lock().map_err(|_| "encoder state poisoned")?;
+            while s.job.is_none() && !s.stop {
+                s = cvar.wait(s).map_err(|_| "encoder state poisoned")?;
+            }
+            if s.stop {
+                return Ok(());
+            }
+            s.job.take().ok_or("encoder wake without a job")?
+        };
+        if tx.send(encode(job)).is_err() {
+            return Ok(());
+        }
+        waker.wake();
     }
 }
 
@@ -348,10 +450,9 @@ impl Drop for Encoder {
     fn drop(&mut self) {
         if let Encoder::Threaded { slot, .. } = self {
             let (lock, cvar) = &**slot;
-            if let Ok(mut s) = lock.lock() {
-                s.stop = true;
-                s.job = None;
-            }
+            let mut s = lock.lock().unwrap_or_else(|e| e.into_inner());
+            s.stop = true;
+            s.job = None;
             cvar.notify_one();
         }
     }
@@ -363,5 +464,67 @@ fn to_image(width: u32, height: u32, bytes: Vec<u8>, has_alpha: bool) -> Option<
         image::RgbaImage::from_raw(width, height, bytes).map(DynamicImage::ImageRgba8)
     } else {
         image::RgbImage::from_raw(width, height, bytes).map(DynamicImage::ImageRgb8)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn worker_panic_and_poison_wake_host_and_preserve_cause() {
+        let mut runtime = crate::Runtime::new().unwrap();
+        let slot = Arc::new((
+            Mutex::new(Slot {
+                job: None,
+                stop: false,
+            }),
+            Condvar::new(),
+        ));
+        let (tx, rx) = mpsc::channel();
+        let worker_slot = slot.clone();
+        let waker = runtime.waker();
+        std::thread::spawn(move || {
+            worker_boundary(&worker_slot, &tx, &waker, || {
+                let _guard = worker_slot.0.lock().unwrap();
+                panic!("test encoder failure");
+            });
+        })
+        .join()
+        .unwrap();
+        assert!(matches!(
+            runtime.next_event_capped(Some(std::time::Duration::from_secs(1))),
+            crate::LoopEvent::Wake
+        ));
+        let mut encoder = Encoder::Threaded {
+            slot,
+            rx,
+            failure: None,
+        };
+        for _ in 0..2 {
+            assert!(
+                matches!(encoder.take_latest(99), Err(ref e) if e == "encoder worker panicked")
+            );
+        }
+        drop(encoder); // poisoned state must not cause a second panic
+    }
+
+    #[test]
+    fn disconnected_worker_is_reported() {
+        let (tx, rx) = mpsc::channel();
+        drop(tx);
+        let slot = Arc::new((
+            Mutex::new(Slot {
+                job: None,
+                stop: false,
+            }),
+            Condvar::new(),
+        ));
+        let mut encoder = Encoder::Threaded {
+            slot,
+            rx,
+            failure: None,
+        };
+        assert!(matches!(encoder.take_latest(0), Err(ref e) if e.contains("disconnected")));
     }
 }

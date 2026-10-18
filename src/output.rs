@@ -11,10 +11,15 @@ use base64::Engine;
 pub fn osc52(text: &str) -> String {
     let payload = base64::engine::general_purpose::STANDARD.encode(text);
     let seq = format!("\x1b]52;c;{payload}\x07");
-    if std::env::var_os("TMUX").is_some() {
-        format!("\x1bPtmux;{}\x1b\\", seq.replace('\x1b', "\x1b\x1b"))
+    passthrough(seq, std::env::var_os("TMUX").is_some())
+}
+
+/// Wrap one complete protocol sequence without changing its chunking or terminator.
+pub(crate) fn passthrough(sequence: String, tmux: bool) -> String {
+    if tmux {
+        format!("\x1bPtmux;{}\x1b\\", sequence.replace('\x1b', "\x1b\x1b"))
     } else {
-        seq
+        sequence
     }
 }
 

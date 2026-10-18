@@ -57,8 +57,8 @@ pub use encode::EncodeMode;
 pub use error::Error;
 pub use input::{InputRouter, KeyBinding, Routed};
 pub use pane::{
-    AUTO_ROW_HEIGHT, FrameStats, KittyIds, MAX_PANE_PIXELS, PaneId, PaneInput, PaneRender, Scale,
-    SlintPane,
+    AUTO_ROW_HEIGHT, FrameStats, Framebuffer, MAX_PANE_PIXELS, PaneId, PaneInput, PaneRender,
+    Scale, SlintPane,
 };
 pub use platform::{LoopEvent, Runtime, Waker};
 pub use widget::SlintWidget;

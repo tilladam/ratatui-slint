@@ -63,7 +63,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             picker.set_protocol_type(protocol);
             let mut pane = rt.create_pane(&picker, Bench::new)?;
             pane.component().set_full_redraw(full);
-            pane.set_encode_mode(EncodeMode::Inline);
+            pane.set_encode_mode(EncodeMode::Inline)?;
             pane.set_area(area);
 
             let writer = CountingWriter::new(std::io::sink());

@@ -32,7 +32,7 @@ fn threaded_encoder_wakes_the_loop_when_done() {
     let mut pane = rt
         .create_pane(&picker(ProtocolType::Sixel), Still::new)
         .unwrap();
-    pane.set_encode_mode(EncodeMode::Threaded);
+    pane.set_encode_mode(EncodeMode::Threaded).unwrap();
     pane.set_area(Rect::new(0, 0, 20, 4));
     let _ = rt.begin_frame();
     // The render is submitted; the encoded frame arrives later, through a wake-up.
@@ -57,7 +57,7 @@ fn frames_encoded_for_an_old_size_are_dropped() {
     let mut pane = rt
         .create_pane(&picker(ProtocolType::Sixel), Still::new)
         .unwrap();
-    pane.set_encode_mode(EncodeMode::Threaded);
+    pane.set_encode_mode(EncodeMode::Threaded).unwrap();
     pane.set_area(Rect::new(0, 0, 60, 10));
     pane.update(); // submits a 600 × 200 px frame
     pane.set_area(Rect::new(0, 0, 30, 5)); // resize before it finishes
@@ -102,7 +102,7 @@ fn every_protocol_encodes() {
         ProtocolType::Iterm2,
     ] {
         let mut pane = rt.create_pane(&picker(protocol), Still::new).unwrap();
-        pane.set_encode_mode(EncodeMode::Inline);
+        pane.set_encode_mode(EncodeMode::Inline).unwrap();
         let area = Rect::new(0, 0, 12, 3);
         pane.set_area(area);
         let _ = rt.begin_frame();
@@ -157,7 +157,15 @@ mod transparency {
         let area = Rect::new(0, 0, 4, 2);
         pane.set_area(area);
         assert!(pane.update());
-        assert_eq!(pane.framebuffer()[pane.framebuffer().len() - 1].alpha, 0);
+        assert_eq!(
+            pane.framebuffer()
+                .premultiplied_rgba()
+                .unwrap()
+                .last()
+                .unwrap()
+                .alpha,
+            0
+        );
         let mut term = test_terminal(4, 2);
         term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
             .unwrap();
@@ -202,7 +210,7 @@ fn iterm2_frames_are_sized_in_cells_and_cover_the_pane() {
     let mut pane = rt
         .create_pane(&picker(ProtocolType::Iterm2), Still::new)
         .unwrap();
-    pane.set_encode_mode(EncodeMode::Inline);
+    pane.set_encode_mode(EncodeMode::Inline).unwrap();
     let area = Rect::new(2, 1, 12, 3);
     pane.set_area(area);
     assert!(pane.update());
@@ -246,7 +254,7 @@ fn sixel_pane_on_the_last_row_leaves_it_out() {
     let mut pane = rt
         .create_pane(&picker(ProtocolType::Sixel), Still::new)
         .unwrap();
-    pane.set_encode_mode(EncodeMode::Inline);
+    pane.set_encode_mode(EncodeMode::Inline).unwrap();
     let area = Rect::new(0, 0, 12, 4); // the whole 12 × 4 terminal
     pane.set_area(area);
     let _ = rt.begin_frame();
@@ -297,7 +305,7 @@ fn sixel_images_stay_within_their_rows() {
     let mut p = ratatui_image::picker::Picker::from_fontsize(FontSize::new(14, 32));
     p.set_protocol_type(ProtocolType::Sixel);
     let mut pane = rt.create_pane(&p, Still::new).unwrap();
-    pane.set_encode_mode(EncodeMode::Inline);
+    pane.set_encode_mode(EncodeMode::Inline).unwrap();
     let area = Rect::new(0, 0, 10, 23); // 23 rows × 32 px = 736 px, not a multiple of 6
     pane.set_area(area);
     assert!(pane.update());
