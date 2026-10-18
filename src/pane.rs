@@ -182,6 +182,16 @@ impl<'a> Framebuffer<'a> {
     }
 }
 
+/// A Kitty frame waiting for its upload to be written. Kitty shows nothing for a placeholder
+/// whose image has not arrived, so the frame is drawn only after the flush that uploads it.
+struct Staged {
+    generation: u64,
+    protocol: Displayed,
+    kitty_id: u32,
+    /// [`crate::platform::output_flushes`] when the upload was queued.
+    queued_at: u64,
+}
+
 /// A Slint component rendered into a ratatui area.
 ///
 /// Create it with [`crate::Runtime::create_pane`]. Lay it out with [`SlintPane::set_area`],
@@ -214,6 +224,8 @@ pub struct SlintPane<C: ComponentHandle> {
     /// Kitty id of the frame on display, and ids of replaced frames awaiting deletion.
     shown_kitty_id: Option<u32>,
     retired_kitty_ids: Vec<u32>,
+    /// A Kitty frame whose upload is queued but may not have reached the terminal yet.
+    staged: Option<Staged>,
     /// A sixel pane on the terminal's last row leaves that row out of its image: the terminal
     /// moves the cursor below a sixel image, which on the last row scrolls the whole screen.
     sixel_skips_last_row: bool,
@@ -264,6 +276,7 @@ impl<C: ComponentHandle> SlintPane<C> {
             reencode: false,
             shown_kitty_id: None,
             retired_kitty_ids: Vec::new(),
+            staged: None,
             sixel_skips_last_row: false,
         };
         pane.window
@@ -382,6 +395,10 @@ impl<C: ComponentHandle> SlintPane<C> {
         self.needs_redraw = true;
         if self.picker.protocol_type() == ProtocolType::Kitty {
             self.reencode = true;
+            // The terminal may have lost its upload too; the reencoded frame replaces it.
+            if let Some(staged) = self.staged.take() {
+                self.retired_kitty_ids.push(staged.kitty_id);
+            }
         }
         self.waker.wake();
     }
@@ -503,6 +520,19 @@ impl<C: ComponentHandle> SlintPane<C> {
                 self.record_error(error);
             }
         }
+        // A staged Kitty frame goes on display once a flush has written its upload.
+        if self
+            .staged
+            .as_ref()
+            .is_some_and(|s| crate::platform::output_flushes() > s.queued_at)
+            && let Some(staged) = self.staged.take()
+        {
+            self.show(staged.generation, staged.protocol, Some(staged.kitty_id));
+        }
+        // While a frame is staged, newer ones wait in the encoder; none of them is uploaded yet.
+        if self.staged.is_some() {
+            return std::mem::take(&mut self.needs_redraw);
+        }
         let latest = match self.encoder.take_latest(self.generation) {
             Ok(done) => done,
             Err(error) => {
@@ -510,22 +540,41 @@ impl<C: ComponentHandle> SlintPane<C> {
                 None
             }
         };
-        if let Some(done) = latest {
+        if let Some(mut done) = latest {
             self.stats.encode = done.elapsed;
             self.last_error = done.error;
             if self.last_error.is_none() {
-                if done.kitty_id != self.shown_kitty_id
-                    && let Some(old) = self.shown_kitty_id
-                {
-                    self.retired_kitty_ids.push(old);
+                match (done.kitty_id, done.protocol.take_upload()) {
+                    (Some(kitty_id), Some(upload)) => {
+                        let queued_at = crate::platform::output_flushes();
+                        crate::platform::queue_upload(upload.as_bytes());
+                        self.staged = Some(Staged {
+                            generation: done.generation,
+                            protocol: done.protocol,
+                            kitty_id,
+                            queued_at,
+                        });
+                        // The host draws and then flushes, which writes the upload.
+                        self.needs_redraw = true;
+                    }
+                    (kitty_id, _) => self.show(done.generation, done.protocol, kitty_id),
                 }
-                self.shown_kitty_id = done.kitty_id;
-                self.displayed = Some((self.generation, done.protocol));
-                self.frames += 1;
-                self.needs_redraw = true;
             }
         }
         std::mem::take(&mut self.needs_redraw)
+    }
+
+    /// Puts an encoded frame on display; the Kitty image it replaces is deleted after the draw.
+    fn show(&mut self, generation: u64, protocol: Displayed, kitty_id: Option<u32>) {
+        if kitty_id != self.shown_kitty_id
+            && let Some(old) = self.shown_kitty_id
+        {
+            self.retired_kitty_ids.push(old);
+        }
+        self.shown_kitty_id = kitty_id;
+        self.displayed = Some((generation, protocol));
+        self.frames += 1;
+        self.needs_redraw = true;
     }
 
     fn record_error(&mut self, error: String) {
@@ -647,6 +696,10 @@ impl<C: ComponentHandle> Drop for SlintPane<C> {
         }
         if let Some(id) = self.shown_kitty_id {
             crate::platform::queue_output(kitty_delete(id, self.picker.tmux_detected()).as_bytes());
+        }
+        if let Some(staged) = &self.staged {
+            let delete = kitty_delete(staged.kitty_id, self.picker.tmux_detected());
+            crate::platform::queue_output(delete.as_bytes());
         }
     }
 }

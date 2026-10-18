@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from fake_terminal import enhanced_key, last_screen, validate_checks
+from fake_terminal import enhanced_key, kitty_placeholders_follow_uploads, last_screen, validate_checks
 
 
 class SmokeAssertions(unittest.TestCase):
@@ -20,10 +20,19 @@ class SmokeAssertions(unittest.TestCase):
             protocol="iterm2", require=["graphics", "keyboard-restore"])), ["keyboard popped"])
 
     def test_missing_graphics_and_restore_fail(self):
-        checks = {"exit status": 0, "kitty transmit": False,
+        checks = {"exit status": 0, "kitty transmit": False, "kitty order": True,
                   "entered alt screen": True, "left alt screen": False}
         self.assertEqual(validate_checks(checks, "", {}, self.args(require=["graphics", "restore"])),
                          ["kitty transmit", "left alt screen"])
+
+    def test_kitty_placeholders_must_follow_their_upload(self):
+        upload = b"\x1b_Ga=T,i=16777217,U=1,q=2;AAAA\x1b\\"  # low 24 bits: 1
+        cell = b"\x1b[38;2;0;0;1;49m" + "\U0010EEEE".encode()
+        self.assertTrue(kitty_placeholders_follow_uploads(upload + cell + cell))
+        self.assertFalse(kitty_placeholders_follow_uploads(cell + upload))
+        checks = {"exit status": 0, "kitty transmit": True, "kitty order": False}
+        self.assertEqual(validate_checks(checks, "", {}, self.args(require=["graphics"])),
+                         ["kitty order"])
 
     def test_idle_requires_both_marks_and_zero_bytes(self):
         for marks, expected in [({}, ["idle a->b"]), ({"a": 10, "b": 11}, ["idle a->b"]),

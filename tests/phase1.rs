@@ -227,32 +227,35 @@ fn fresh_kitty_ids_delete_the_replaced_image_after_drawing() {
     let area = Rect::new(0, 0, 8, 2);
     pane.set_area(area);
     let mut term = test_terminal(8, 2);
+    // One host-loop step: update, draw, then write pending output.
+    let mut step = |pane: &mut ratatui_slint::SlintPane<Still>| {
+        assert!(pane.update());
+        term.draw(|f| f.render_stateful_widget(SlintWidget, area, pane))
+            .unwrap();
+        let mut out = Vec::new();
+        rt.write_pending_output(&mut out).unwrap();
+        String::from_utf8(out).unwrap()
+    };
 
-    assert!(pane.update());
-    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
-        .unwrap();
-    let mut out = Vec::new();
-    rt.write_pending_output(&mut out).unwrap();
-    let first = kitty_id_from(&out);
-    assert!(!String::from_utf8_lossy(&out).contains("a=d"));
-    out.clear();
+    // A frame is uploaded by one step and drawn by the next.
+    let out = step(&mut pane);
+    let first = kitty_id_from(out.as_bytes());
+    assert!(out.contains("a=T") && !out.contains("a=d"));
+    assert_eq!(step(&mut pane), "");
 
     pane.component()
         .set_fill(slint::Color::from_rgb_u8(0, 0, 200));
-    assert!(pane.update());
-    rt.write_pending_output(&mut out).unwrap();
+    let out = step(&mut pane);
+    let second = kitty_id_from(out.as_bytes());
+    assert_ne!(first, second);
     assert!(
-        out.is_empty(),
+        !out.contains("a=d"),
         "the old image must stay until the new frame is drawn"
     );
-    term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
-        .unwrap();
-    rt.write_pending_output(&mut out).unwrap();
-    let second = kitty_id_from(&out);
-    assert_ne!(first, second);
-    let out = String::from_utf8(out).unwrap();
-    assert!(out.ends_with(&format!("\x1b_Ga=d,d=I,i={first},q=2\x1b\\")));
-    assert!(out.find("a=T").unwrap() < out.find("a=d").unwrap());
+    assert_eq!(
+        step(&mut pane),
+        format!("\x1b_Ga=d,d=I,i={first},q=2\x1b\\")
+    );
 
     // Dropping the pane deletes the image on display.
     drop(pane);
@@ -394,25 +397,50 @@ fn dropping_before_a_replacement_draw_deletes_retired_kitty_images() {
     let mut term = test_terminal(8, 2);
     term.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))
         .unwrap();
-    let mut upload = Vec::new();
-    rt.write_pending_output(&mut upload).unwrap();
-    let first = kitty_id_from(&upload);
+    let mut stream = Vec::new();
+    rt.write_pending_output(&mut stream).unwrap();
+    let first = kitty_id_from(&stream);
+    // Shows the first frame and stages a replacement; a third frame waits in the encoder.
     pane.component()
         .set_fill(slint::Color::from_rgb_u8(255, 0, 0));
     assert!(pane.update());
     pane.component()
         .set_fill(slint::Color::from_rgb_u8(0, 0, 255));
-    assert!(pane.update());
+    assert!(
+        !pane.update(),
+        "nothing new to draw until the staged upload is written"
+    );
     let mut out = Vec::new();
     rt.write_pending_output(&mut out).unwrap();
-    assert!(out.is_empty(), "old image must survive until draw or drop");
-    drop(pane);
-    rt.write_pending_output(&mut out).unwrap();
-    let out = String::from_utf8(out).unwrap();
-    assert!(out.contains(&format!("\x1b_Ga=d,d=I,i={first},q=2\x1b\\")));
-    assert_eq!(
-        out.matches("a=d,d=I").count(),
-        3,
-        "all accepted IDs must be deleted"
+    assert!(
+        !String::from_utf8_lossy(&out).contains("a=d"),
+        "old image must survive until draw or drop"
     );
+    stream.extend_from_slice(&out);
+    drop(pane);
+    rt.write_pending_output(&mut stream).unwrap();
+    let stream = String::from_utf8(stream).unwrap();
+    assert!(stream.contains(&format!("\x1b_Ga=d,d=I,i={first},q=2\x1b\\")));
+    let mut uploaded = graphics_ids(&stream, "a=T");
+    let mut deleted = graphics_ids(&stream, "a=d");
+    uploaded.sort();
+    deleted.sort();
+    assert_eq!(uploaded.len(), 2);
+    assert_eq!(deleted, uploaded, "every uploaded ID must be deleted once");
+}
+
+/// The `i=` IDs of the Kitty graphics commands with the given action, in stream order.
+fn graphics_ids(stream: &str, action: &str) -> Vec<String> {
+    stream
+        .split("\x1b_G")
+        .skip(1)
+        .filter_map(|cmd| {
+            let keys = cmd.split([';', '\x1b']).next()?;
+            keys.split(',').any(|kv| kv == action).then(|| {
+                keys.split(',')
+                    .find_map(|kv| kv.strip_prefix("i="))
+                    .map(str::to_owned)
+            })?
+        })
+        .collect()
 }

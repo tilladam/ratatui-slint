@@ -244,6 +244,7 @@ def main():
         "keyboard pushed": bool(re.search(rb"\x1b\[>[0-9]+u", d)),
         "keyboard popped": b"\x1b[<1u" in d,
         "kitty transmit": b"\x1b_Ga=T" in d or b",a=T," in d,
+        "kitty order": kitty_placeholders_follow_uploads(d),
     }
     screen = last_screen(d, args.rows, args.cols)
     failed = validate_checks(checks, screen, marks, args)
@@ -261,6 +262,28 @@ def main():
     sys.exit(1 if failed else 0)
 
 
+KITTY_TOKENS = re.compile(rb"\x1b_G([^;\x1b]*)(?:;[^\x1b]*)?\x1b\\|\x1b\[([0-9;]*)m|\xf4\x8e\xbb\xae")
+
+
+def kitty_placeholders_follow_uploads(d):
+    """Kitty draws nothing for a placeholder whose image has not arrived, so every placeholder
+    must follow its image's upload. A placeholder carries the ID's low 24 bits as its colour."""
+    uploaded, fg = set(), None
+    for m in KITTY_TOKENS.finditer(d):
+        if m.group(1) is not None:
+            keys = dict(kv.split(b"=", 1) for kv in m.group(1).split(b",") if b"=" in kv)
+            if keys.get(b"a") == b"T" and b"i" in keys:
+                uploaded.add(int(keys[b"i"]) & 0xFFFFFF)
+        elif m.group(2) is not None:
+            p = m.group(2).split(b";")
+            for i in range(len(p) - 4):
+                if p[i] == b"38" and p[i + 1] == b"2":
+                    fg = int(p[i + 2]) << 16 | int(p[i + 3]) << 8 | int(p[i + 4])
+        elif fg not in uploaded:
+            return False
+    return True
+
+
 def validate_checks(checks, screen, marks, args):
     failed = []
     if checks["exit status"] != args.expect_exit:
@@ -272,7 +295,7 @@ def validate_checks(checks, screen, marks, args):
         if not checks[key]:
             failed.append(key)
     required = {
-        "graphics": [{"none": "half-block glyphs", "sixel": "sixel data", "kitty": "kitty transmit", "iterm2": "iterm2 data"}[args.protocol]],
+        "graphics": {"none": ["half-block glyphs"], "sixel": ["sixel data"], "kitty": ["kitty transmit", "kitty order"], "iterm2": ["iterm2 data"]}[args.protocol],
         "restore": ["entered alt screen", "left alt screen"],
         "input-restore": ["mouse capture off", "bracketed paste off", "focus reporting off"],
         "keyboard-restore": ["keyboard pushed", "keyboard popped"],

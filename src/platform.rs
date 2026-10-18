@@ -68,6 +68,10 @@ pub(crate) struct Shared {
     clipboard: RefCell<Option<String>>,
     selection: RefCell<Option<String>>,
     pending_output: RefCell<Vec<u8>>,
+    /// How many times pending output has been written to the terminal.
+    flushes: Cell<u64>,
+    /// A Kitty upload is queued; the flush that writes it wakes the loop.
+    upload_queued: Cell<bool>,
 }
 
 impl Shared {
@@ -106,6 +110,27 @@ pub(crate) fn queue_output(bytes: &[u8]) {
             shared.pending_output.borrow_mut().extend_from_slice(bytes);
         }
     });
+}
+
+/// Queues a Kitty upload. The flush that writes it wakes the loop, so the pane waiting to show
+/// the image gets its next update.
+pub(crate) fn queue_upload(bytes: &[u8]) {
+    CURRENT.with(|c| {
+        if let Some(shared) = c.borrow().upgrade() {
+            shared.pending_output.borrow_mut().extend_from_slice(bytes);
+            shared.upload_queued.set(true);
+        }
+    });
+}
+
+/// How many times pending output has been written. Bytes queued while this was `n` are on the
+/// terminal once it exceeds `n`.
+pub(crate) fn output_flushes() -> u64 {
+    CURRENT.with(|c| {
+        c.borrow()
+            .upgrade()
+            .map_or(0, |shared| shared.flushes.get())
+    })
 }
 
 /// Only one platform per process may register Slint's event-loop proxy, because Slint keeps
@@ -221,6 +246,8 @@ impl Runtime {
             clipboard: RefCell::default(),
             selection: RefCell::default(),
             pending_output: RefCell::default(),
+            flushes: Cell::default(),
+            upload_queued: Cell::default(),
         });
         let owns_proxy = !PROXY_CLAIMED.swap(true, Ordering::SeqCst);
         let platform = TermPlatform {
@@ -443,12 +470,18 @@ impl Runtime {
     /// Writes queued clipboard sequences, Kitty uploads, and image deletions to `out`.
     /// Call after every `terminal.draw`, using the terminal backend's writer. Skipping this
     /// leaves Kitty images unuploaded and replaced images allocated in the terminal.
+    /// A new Kitty frame is drawn only after the flush that uploads it, so the terminal never
+    /// sees placeholders for a missing image; that flush wakes the loop for the frame's draw.
     /// Treat write failures as fatal, or explicitly invalidate panes before trying to recover.
     pub fn write_pending_output(&self, out: &mut impl Write) -> std::io::Result<()> {
         let bytes = std::mem::take(&mut *self.shared.pending_output.borrow_mut());
         if !bytes.is_empty() {
             out.write_all(&bytes)?;
             out.flush()?;
+            self.shared.flushes.set(self.shared.flushes.get() + 1);
+            if self.shared.upload_queued.take() {
+                let _ = self.tx.send(Msg::Wake);
+            }
         }
         Ok(())
     }

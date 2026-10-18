@@ -105,7 +105,8 @@ pub(crate) enum Displayed {
     Stateful(StatefulProtocol),
     /// An escape sequence encoded here (iTerm2 and sixel), drawn from the area's first cell.
     Raw { data: String, cells: Size },
-    /// The upload is separate from placeholders so later widgets cannot erase it.
+    /// The upload is separate from placeholders so later widgets cannot erase it. The pane
+    /// queues it before any placeholder of the image is drawn.
     Kitty {
         protocol: StatefulProtocol,
         upload: Option<String>,
@@ -123,6 +124,14 @@ impl Displayed {
         }
     }
 
+    /// The Kitty upload, the first time it is asked for.
+    pub fn take_upload(&mut self) -> Option<String> {
+        match self {
+            Displayed::Kitty { upload, .. } => upload.take(),
+            _ => None,
+        }
+    }
+
     pub fn render(
         &mut self,
         area: ratatui::layout::Rect,
@@ -130,13 +139,7 @@ impl Displayed {
         damage: bool,
     ) {
         match self {
-            Displayed::Stateful(p) => p.render(area, buf),
-            Displayed::Kitty { protocol, upload } => {
-                protocol.render(area, buf);
-                if let Some(upload) = upload.take() {
-                    crate::platform::queue_output(upload.as_bytes());
-                }
-            }
+            Displayed::Stateful(p) | Displayed::Kitty { protocol: p, .. } => p.render(area, buf),
             Displayed::Raw { data, cells } => {
                 use ratatui::buffer::CellDiffOption;
                 let w = cells.width.min(area.width);

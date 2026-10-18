@@ -47,8 +47,13 @@ Slint dependency shown in README.md; importing only the reexport is insufficient
 - Kitty uses a fresh image ID for each encoded frame. The upload is extracted from
   ratatui-image's first render on the encoder thread and sent through pending output, separately
   from placeholder cells. A later widget may overwrite any placeholder, including the first,
-  without losing the upload. Replaced IDs are deleted after the replacement upload. Always flush
-  pending output; merely rendering SlintWidget is insufficient to upload Kitty images.
+  without losing the upload. Kitty draws nothing for a placeholder whose image has not arrived,
+  so update() queues a new frame's upload and returns true, and only an update() after the
+  flush that wrote it puts the frame on display; until then the previous image stays. That
+  flush wakes the runtime, so the frame follows at the next allowed frame. The replaced ID is
+  deleted after the draw that removed its placeholders. Always flush pending output after every
+  draw; merely rendering SlintWidget never shows a Kitty frame. frames() counts a Kitty frame
+  when it goes on display.
 - Kitty placeholders repaint after an ordinary overlay disappears. If terminal image storage
   is lost, invalidate() creates a fresh encoded image and ID. This costs a new encoding.
 - Sixel images are cut to whole six-pixel bands. At the terminal's bottom edge the last cell row

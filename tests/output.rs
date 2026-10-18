@@ -109,6 +109,9 @@ fn every_protocol_encodes() {
         pane.set_area(area);
         let _ = rt.begin_frame();
         assert!(pane.update(), "{protocol:?}");
+        // Kitty draws a frame on the update after the flush that uploaded it.
+        rt.write_pending_output(&mut std::io::sink()).unwrap();
+        pane.update();
         assert_eq!(pane.last_error(), None, "{protocol:?}");
         // One spare row: a sixel pane on the terminal's last row deliberately waits for a
         // shorter frame (see sixel_pane_on_the_last_row_leaves_it_out).
