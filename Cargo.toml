@@ -3,13 +3,13 @@ name = "ratatui-slint"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.92"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 description = "Embed Slint components as pixel widgets inside ratatui applications"
 repository = "https://github.com/tilladam/ratatui-slint"
 readme = "README.md"
 keywords = ["ratatui", "slint", "tui", "terminal", "gui"]
 categories = ["command-line-interface", "gui"]
-include = ["src/**", "examples/*.rs", "tests/**", "README.md", "LICENSE"]
+include = ["src/**", "examples/*.rs", "tests/**", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
 [package.metadata.docs.rs]
 all-features = true

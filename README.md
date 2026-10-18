@@ -145,6 +145,10 @@ final screen.
 
 ## Licence
 
-This crate is MIT licensed, see [LICENSE](LICENSE). Slint itself is available under GPL-3.0, a
-royalty-free licence or a commercial licence. Users of this crate pick the Slint licence that fits
-their product.
+This crate is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
+your option. Slint itself is available under GPL-3.0, a royalty-free licence or a commercial
+licence. Users of this crate pick the Slint licence that fits their product.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+this crate by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
+any additional terms or conditions.

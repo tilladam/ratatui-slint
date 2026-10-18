@@ -2,7 +2,7 @@
 name = "live-preview"
 version = "0.1.0"
 edition = "2024"
-license = "MIT"
+license = "MIT OR Apache-2.0"
 publish = false
 description = "Hot-reloading .slint preview in a terminal pane, built on ratatui-slint"
 
