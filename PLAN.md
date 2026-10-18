@@ -1,5 +1,9 @@
 # Slint inside ratatui — implementation plan
 
+> Historical design and measurements from October 2026. Current behavior is documented in
+> [docs/INTEGRATION.md](docs/INTEGRATION.md); release checks are in
+> [docs/VALIDATION.md](docs/VALIDATION.md). Status statements below are historical.
+
 2026-10-11 · Till Adam · revised the same day after a Codex plan review against the spike and the pinned crate sources, then updated with implementation results
 
 ## Implementation status (2026-10-11)

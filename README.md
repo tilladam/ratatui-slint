@@ -9,14 +9,16 @@ sixel, iTerm2 or half-block output. The ratatui loop drives Slint's timers, anim
 rendering, and Slint never runs its own event loop. Mouse and keyboard input goes to the pane
 under the pointer or in focus, and keys Slint rejects fall back to ratatui.
 
-https://github.com/user-attachments/assets/8172ce62-0ec5-464e-a368-481e82aad6dc
+<https://github.com/user-attachments/assets/8172ce62-0ec5-464e-a368-481e82aad6dc>
 
 [▶ Demo video](https://github.com/user-attachments/assets/8172ce62-0ec5-464e-a368-481e82aad6dc)
 
-Status: pre-release. The headless tests pass, and every example passes scripted checks under a
-simulated terminal. The examples have been run by hand in kitty, Ghostty, WezTerm, iTerm2 and
-Terminal.app. tmux and SSH are untested. See [PLAN.md](PLAN.md) for the design, measurements
-and what is still open.
+Status: pre-release, targeting Linux and macOS. The earlier examples were exercised by hand in
+kitty, Ghostty, WezTerm, iTerm2 and Terminal.app. The release hardening changes still require
+fresh real-terminal validation; simulated-terminal tests cannot verify image display. Windows,
+tmux and SSH are unverified. See the
+[integration guide](https://github.com/tilladam/ratatui-slint/blob/main/docs/INTEGRATION.md) and
+[release validation matrix](https://github.com/tilladam/ratatui-slint/blob/main/docs/VALIDATION.md).
 
 ## Try it
 
@@ -38,6 +40,7 @@ has focus. Each example's keys are listed at the top of its source file in `exam
 | `sysmon` | A ratatui process table beside Slint per-core gauges, a memory gauge and a CPU graph. `p` pauses sampling: with nothing changing, nothing is redrawn and no bytes go to the terminal. |
 | `device_console` | An 800 × 480 touch-panel UI scaled into a pane with `Scale::Fit`, inside a ratatui console with logs and a config editor. |
 | `live-preview` | Recompiles a `.slint` file on save and swaps it in. Without a path it shows a bundled demo. `s` cycles the scale, `r` reloads. |
+| `overlay` | Animated pane with a host overlay covering its first cell. `o` toggles it. |
 | `termbench` | Runs an animated pane full screen for 5 seconds, then prints fps, per-frame costs and bytes written. |
 | `bench` | Per-protocol encode cost and output size, written to memory, so no terminal is needed. |
 
@@ -61,39 +64,81 @@ rough. Run `termbench` to measure your own terminal.
 
 ## Usage
 
-```rust
-use ratatui_slint::{InputRouter, LoopEvent, PaneInput, Routed, Runtime, SlintWidget};
-use ratatui_slint::terminal::{TerminalOptions, TerminalSession};
+Use Rust 1.92 or newer. Add these dependencies (no native Slint windowing backend is needed):
 
-slint::slint! { export component Hello inherits Window { Text { text: "hello"; } } }
+```toml
+[dependencies]
+ratatui-slint = "0.1"
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2"] }
+ratatui = "0.30"
+crossterm = "0.29"
+```
+
+Slint macros generate absolute `::slint` paths, so keep the direct dependency above even
+though ratatui-slint reexports Slint. Click to focus a pane; Ctrl+G returns focus
+to the host, where `q` quits.
+
+<!-- consumer-example -->
+```rust,no_run
+use crossterm::event::{Event, KeyCode, KeyEventKind};
+use ratatui_slint::{InputRouter, LoopEvent, Routed, Runtime, SlintWidget};
+use ratatui_slint::terminal::{self, TerminalOptions, TerminalSession};
+
+slint::slint! {
+    export component Hello inherits Window {
+        background: #202830;
+        Text { text: "Hello from Slint"; color: white; }
+    }
+}
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let mut rt = Runtime::new()?;                          // installs the Slint platform
+    let mut rt = Runtime::new()?;
     let mut session = TerminalSession::init(TerminalOptions::default())?;
-    rt.spawn_terminal_reader();                            // after the terminal queries
+    rt.spawn_terminal_reader()?; // after queries that read stdin
     let mut pane = rt.create_pane(&session.picker, Hello::new)?;
     let mut router = InputRouter::new();
     router.set_keyboard_enhanced(session.keyboard_enhanced);
-    loop {
-        match rt.next_event() {                            // blocks until input, a timer or a frame
-            LoopEvent::Terminal(ev) => {
-                if router.route(&ev, &[&pane as &dyn PaneInput]) == Routed::Unhandled {
-                    // ratatui handles the event; quit on 'q' etc.
+    let result: Result<(), Box<dyn std::error::Error>> = (|| {
+        loop {
+            match rt.next_event() {
+                LoopEvent::Quit => break,
+                LoopEvent::InputError(error) => return Err(error.into()),
+                LoopEvent::Terminal(event) => {
+                    if let Event::Resize(..) = event
+                        && let Some(font) = terminal::cell_size()
+                    {
+                        pane.set_font_size(font);
+                    }
+                    if router.route(&event, &[&pane]) == Routed::Unhandled
+                        && matches!(event, Event::Key(key)
+                            if key.kind == KeyEventKind::Press && key.code == KeyCode::Char('q'))
+                    {
+                        break;
+                    }
+                }
+                _ => {}
+            }
+            if rt.begin_frame() {
+                let area = session.terminal.size()?.into();
+                pane.set_area(area);
+                let changed = pane.update();
+                if let Some(error) = pane.last_error() {
+                    return Err(std::io::Error::other(error).into());
+                }
+                if changed {
+                    session.terminal.draw(|frame| {
+                        frame.render_stateful_widget(SlintWidget, area, &mut pane);
+                    })?;
                 }
             }
-            LoopEvent::Quit => break,
-            _ => {}
+            // Kitty uploads/deletions and clipboard output share the backend writer.
+            rt.write_pending_output(session.terminal.backend_mut())?;
         }
-        if rt.begin_frame() {                              // frame cap and idle detection
-            let area = session.terminal.size()?.into();
-            pane.set_area(area);
-            if pane.update() {                             // render + encode only when dirty
-                session.terminal.draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
-            }
-        }
-        rt.write_pending_output(session.terminal.backend_mut())?; // OSC 52 clipboard
-    }
-    Ok(())
+        Ok(())
+    })();
+    drop(pane); // queues image deletion
+    let cleanup = session.finish(&mut rt).map_err(Into::into);
+    result.and(cleanup) // retain the application error if cleanup also fails
 }
 ```
 
@@ -129,23 +174,33 @@ Cargo features:
 
 - `image-decoders` (default) decodes PNG, JPEG and SVG images in `.slint` files, including the
   std-widgets icons.
-- `transparency` renders with alpha. Kitty and iTerm2 keep it, and the other protocols composite
-  over `SlintPane::set_background`.
+- `transparency` enables `pane.set_transparency(true)?` for alpha output in Kitty/iTerm2.
+  Output stays opaque until opted in, even when another dependency enables the feature. The
+  feature changes framebuffer storage to premultiplied RGBA, exposed through the stable
+  `Framebuffer` enum. Other protocols composite over `SlintPane::set_background`.
+
+Only PNG/JPEG/SVG decoding is promised. Broad image-format defaults (including incidental
+GIF/WebP/BMP decoding) are disabled to avoid pulling unrelated codecs into every application.
+After removing a ratatui overlay over a sixel/iTerm2 pane, call `pane.invalidate()`. See the
+[integration guide](https://github.com/tilladam/ratatui-slint/blob/main/docs/INTEGRATION.md)
+for composition, shutdown, and custom-host requirements.
 
 ## Testing
 
 ```sh
 cargo test --workspace
+cargo test -p ratatui-slint --no-default-features
+python3 scripts/check_consumer.py
 ./scripts/smoke.sh   # every example under a simulated terminal, per protocol
 ```
 
 `scripts/fake_terminal.py` runs a program in a pseudo-terminal that answers the startup queries
-like a kitty, sixel or plain terminal would. It sends scripted clicks and keys, and checks the
+like a kitty, sixel, iTerm2 or plain terminal would, including enhanced keyboard negotiation. It sends scripted clicks and keys, and checks the
 final screen.
 
 ## Licence
 
-This crate is licensed under either of [MIT](LICENSE-MIT) or [Apache-2.0](LICENSE-APACHE), at
+This crate is licensed under either of [MIT](https://github.com/tilladam/ratatui-slint/blob/main/LICENSE-MIT) or [Apache-2.0](https://github.com/tilladam/ratatui-slint/blob/main/LICENSE-APACHE), at
 your option. Slint itself is available under GPL-3.0, a royalty-free licence or a commercial
 licence. Users of this crate pick the Slint licence that fits their product.
 

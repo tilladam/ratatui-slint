@@ -9,7 +9,7 @@ repository = "https://github.com/tilladam/ratatui-slint"
 readme = "README.md"
 keywords = ["ratatui", "slint", "tui", "terminal", "gui"]
 categories = ["command-line-interface", "gui"]
-include = ["src/**", "examples/*.rs", "tests/**", "README.md", "LICENSE-MIT", "LICENSE-APACHE"]
+include = ["src/**", "examples/*.rs", "tests/**", "README.md", "CHANGELOG.md", "docs/INTEGRATION.md", "docs/VALIDATION.md", "LICENSE-MIT", "LICENSE-APACHE"]
 
 [package.metadata.docs.rs]
 all-features = true

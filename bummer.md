@@ -65,3 +65,24 @@ Next time: verified — inspect dirty-state consumption before adjusting scripte
 Revisit when: redraw conditions no longer consume mutable dirty state.
 Cost: two diagnostic terminal runs and a temporary instrumented example build.
 Scope: project     Status: active
+
+## 2026-10-18 · Slint reexport alone does not support generated macro code · #README.md #testing #api
+Situation: release hardening, compiling the README application from a separate consumer crate.
+Tried: depended only on ratatui-slint and used its slint reexport for slint::slint!; workspace examples compiled.
+Outcome: the separate consumer failed with unresolved `::slint` paths and related generated-code errors. The workspace's direct Slint dependency hid this requirement.
+Evidence: 2026-10-18 scripts/check_consumer.py default consumer run; E0433 originates in the Slint macro.
+Next time: add an explicitly configured direct Slint dependency to macro consumers and verify the README from a separate Cargo workspace. Direct dependency is required by the generated paths; full consumer validation is tracked with the release checks.
+Revisit when: Slint macros support an explicit reexport/crate path or generate paths relative to the invocation.
+Cost: a fresh-consumer build and a documentation/test-fixture revision.
+Scope: project     Status: active
+
+## 2026-10-18 · Cargo build time consumed the pseudo-terminal test timeout · #scripts/smoke.sh #testing
+Situation: expanded smoke matrix ran a terminal-session integration test while fresh-consumer MSRV compilation was also using the target directory.
+Tried: launched `cargo test --test session_lifecycle -- --ignored --nocapture` inside the fake terminal's 30-second runtime timeout.
+Outcome: the check timed out with zero bytes of child output and no terminal queries; it did not establish a session-lifecycle failure.
+Evidence: 2026-10-18 smoke output reported timeout, bytes written 0, and no query replies after all 22 preceding application cases passed.
+Hypothesis: Cargo was waiting for the concurrent build's target lock or compiling before starting the test binary.
+Next time: compile the test executable before entering the pseudo-terminal, resolve its path from Cargo JSON, then apply the runtime timeout to the executable alone.
+Revisit when: the harness separately budgets compilation and program execution.
+Cost: one 30-second timeout and a rerun of the terminal-session check.
+Scope: global-candidate     Status: active
