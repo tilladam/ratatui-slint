@@ -107,3 +107,14 @@ Next time: verified — use `${=args}` (or arrays) in zsh, and check each comman
 Revisit when: the tool shell is bash.
 Cost: one wasted multi-minute run.
 Scope: global-candidate     Status: active
+
+## 2026-10-18 · Moving the kitty upload after the draw blanked animated panes · #src/pane.rs #src/encode.rs #kitty #testing
+Situation: the R8 fix (ec108d4) moved kitty uploads out of the first cell into pending output, written after terminal.draw, so overlays cannot erase them.
+Tried: unit tests and fake-terminal smoke checked that an upload (a=T) was present and that it preceded the replaced image's delete.
+Outcome: in a real kitty, termbench and the overlay example (continuous animation) stayed blank, while hello (static) and sysmon (about 1 Hz) looked fine. Each new image's placeholders were written before its upload.
+Evidence: 2026-10-18; in the same kitty, termbench from 06721db animated (24.9 fps) and the current build was blank. Recorded streams: 06721db passes the rule "every placeholder after its image's upload", the broken build fails at its first placeholder.
+Hypothesis: kitty renders between placeholders and upload; with continuous frames it nearly always does.
+Next time: verified — keep upload → placeholders → delete: the pane stages a kitty frame until the flush that wrote its upload, and fake_terminal.py checks the order in every kitty smoke case. Test ordering invariants of terminal protocols, not only presence.
+Revisit when: kitty draws placeholders whose image arrives later.
+Cost: a release-hardening regression caught only by manual validation; one debugging session.
+Scope: global-candidate     Status: active
