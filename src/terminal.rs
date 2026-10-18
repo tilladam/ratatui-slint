@@ -3,9 +3,11 @@
 //! Order matters: the graphics query and the keyboard-enhancement query both read stdin, so they
 //! run before [`crate::Runtime::spawn_terminal_reader`] starts consuming input.
 
+use crate::platform::ReaderControl;
 use std::io::{self, Stdout, Write};
-use std::sync::Once;
 use std::sync::atomic::{AtomicBool, AtomicU8, Ordering};
+use std::sync::{Arc, Mutex, Once, Weak};
+use std::thread::ThreadId;
 use std::time::Duration;
 
 use crossterm::event::{
@@ -26,6 +28,7 @@ pub type SessionTerminal = Terminal<CrosstermBackend<CountingWriter<Stdout>>>;
 
 /// What to enable when the session starts.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct TerminalOptions {
     /// Report mouse clicks, motion and wheel events.
     pub mouse: bool,
@@ -66,6 +69,9 @@ impl Default for TerminalOptions {
 /// An initialised terminal plus what was learned about it. Restores the terminal on drop and on
 /// panic.
 pub struct TerminalSession {
+    owner: Arc<Owner>,
+    // Raw terminal ownership and panic cleanup belong to the creating thread.
+    _thread: std::marker::PhantomData<std::rc::Rc<()>>,
     /// The ratatui terminal to draw with.
     pub terminal: SessionTerminal,
     /// The detected graphics protocol and cell size. Pass to [`crate::Runtime::create_pane`].
@@ -82,8 +88,49 @@ const PASTE: u8 = 2;
 const FOCUS: u8 = 4;
 const KEYBOARD: u8 = 8;
 
-static ACTIVE: AtomicBool = AtomicBool::new(false);
-static ENABLED: AtomicU8 = AtomicU8::new(0);
+struct Owner {
+    thread: ThreadId,
+    enabled: AtomicU8,
+    restoring: AtomicBool,
+    readers: Mutex<Vec<Weak<ReaderControl>>>,
+}
+
+static ACTIVE: Mutex<Option<Arc<Owner>>> = Mutex::new(None);
+
+fn reserve() -> io::Result<Arc<Owner>> {
+    let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    if active.is_some() {
+        return Err(io::Error::new(
+            io::ErrorKind::AlreadyExists,
+            "a terminal session is already active",
+        ));
+    }
+    let owner = Arc::new(Owner {
+        thread: std::thread::current().id(),
+        enabled: AtomicU8::new(0),
+        restoring: AtomicBool::new(false),
+        readers: Mutex::new(Vec::new()),
+    });
+    *active = Some(owner.clone());
+    Ok(owner)
+}
+
+pub(crate) fn attach_reader(reader: &Arc<ReaderControl>) -> io::Result<()> {
+    let active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    if let Some(owner) = active.as_ref() {
+        if owner.thread != std::thread::current().id() || owner.restoring.load(Ordering::Acquire) {
+            return Err(io::Error::other(
+                "start the reader on the active session's owner thread",
+            ));
+        }
+        owner
+            .readers
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(Arc::downgrade(reader));
+    }
+    Ok(())
+}
 static HOOK: Once = Once::new();
 
 /// The terminal's current cell size in pixels, from the window-size ioctl. Unlike the startup
@@ -124,15 +171,17 @@ impl TerminalSession {
     /// reporting.
     pub fn init(options: TerminalOptions) -> io::Result<Self> {
         install_panic_hook();
-        crossterm::terminal::enable_raw_mode()?;
-        ACTIVE.store(true, Ordering::SeqCst);
-        // Any failure from here on must leave the terminal as it was.
-        Self::init_inner(options).inspect_err(|_| {
-            let _ = restore_terminal();
-        })
+        let owner = reserve()?;
+        // Reservation precedes any terminal changes, including raw mode.
+        let result = crossterm::terminal::enable_raw_mode()
+            .and_then(|()| Self::init_inner(options, owner.clone()));
+        if result.is_err() {
+            let _ = restore_owner(&owner);
+        }
+        result
     }
 
-    fn init_inner(options: TerminalOptions) -> io::Result<Self> {
+    fn init_inner(options: TerminalOptions, owner: Arc<Owner>) -> io::Result<Self> {
         let mut out = io::stdout();
         crossterm::execute!(out, EnterAlternateScreen)?;
 
@@ -164,13 +213,15 @@ impl TerminalSession {
 
         let keyboard_enhanced = options.keyboard_enhancement
             && crossterm::terminal::supports_keyboard_enhancement().unwrap_or(false);
-        enable_input_modes(&mut out, &options, keyboard_enhanced, &ENABLED)?;
+        enable_input_modes(&mut out, &options, keyboard_enhanced, &owner.enabled)?;
 
         let writer = CountingWriter::new(io::stdout());
         let bytes = writer.counter();
         let mut terminal = Terminal::new(CrosstermBackend::new(writer))?;
         terminal.clear()?;
         Ok(Self {
+            owner,
+            _thread: std::marker::PhantomData,
             terminal,
             picker,
             keyboard_enhanced,
@@ -178,10 +229,22 @@ impl TerminalSession {
         })
     }
 
-    /// Restores the terminal. Safe to call more than once.
+    /// Stops terminal input, flushes pending images/clipboard output, and restores modes.
+    /// Drop panes first so their image deletions are included. Restoration is attempted even
+    /// when output fails. On an application error, preserve that error over a cleanup error.
+    pub fn finish(&mut self, runtime: &mut crate::Runtime) -> io::Result<()> {
+        if !is_active(&self.owner) {
+            return Ok(());
+        }
+        runtime.stop_terminal_reader();
+        let output = runtime.write_pending_output(self.terminal.backend_mut());
+        output.and(self.restore())
+    }
+
+    /// Restores this session and stops its reader. Safe to call more than once, even after a
+    /// newer session has started. A failed restore disarms the session after best-effort cleanup.
     pub fn restore(&mut self) -> io::Result<()> {
-        let _ = self.terminal.show_cursor();
-        restore_terminal()
+        restore_owner(&self.owner)
     }
 }
 
@@ -193,13 +256,36 @@ impl Drop for TerminalSession {
 
 /// Undoes everything [`TerminalSession::init`] enabled. Idempotent; also runs from the panic hook.
 pub fn restore_terminal() -> io::Result<()> {
-    if !ACTIVE.swap(false, Ordering::SeqCst) {
+    let owner = ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+    owner.map_or(Ok(()), |owner| restore_owner(&owner))
+}
+
+fn is_active(owner: &Arc<Owner>) -> bool {
+    ACTIVE
+        .lock()
+        .unwrap_or_else(|e| e.into_inner())
+        .as_ref()
+        .is_some_and(|active| Arc::ptr_eq(active, owner))
+        && !owner.restoring.load(Ordering::Acquire)
+}
+
+fn restore_owner(owner: &Arc<Owner>) -> io::Result<()> {
+    if !is_active(owner) || owner.restoring.swap(true, Ordering::AcqRel) {
         return Ok(());
     }
-    let enabled = ENABLED.swap(0, Ordering::SeqCst);
-    let mut out = io::stdout();
-    // Always try to leave raw mode, even when writing the restore sequences fails.
-    restore_input_modes(&mut out, enabled).and(crossterm::terminal::disable_raw_mode())
+    // Keep the reservation until restoration completes. Never hold a mutex while joining.
+    let readers = std::mem::take(&mut *owner.readers.lock().unwrap_or_else(|e| e.into_inner()));
+    for reader in readers.into_iter().filter_map(|r| r.upgrade()) {
+        reader.stop();
+    }
+    let enabled = owner.enabled.swap(0, Ordering::SeqCst);
+    let result = restore_input_modes(&mut io::stdout(), enabled)
+        .and(crossterm::terminal::disable_raw_mode());
+    let mut active = ACTIVE.lock().unwrap_or_else(|e| e.into_inner());
+    if active.as_ref().is_some_and(|a| Arc::ptr_eq(a, owner)) {
+        *active = None;
+    }
+    result
 }
 
 fn enable_input_modes(
@@ -263,7 +349,12 @@ fn install_panic_hook() {
     HOOK.call_once(|| {
         let previous = std::panic::take_hook();
         std::panic::set_hook(Box::new(move |info| {
-            let _ = restore_terminal();
+            let owner = ACTIVE.lock().unwrap_or_else(|e| e.into_inner()).clone();
+            if let Some(owner) = owner
+                && owner.thread == std::thread::current().id()
+            {
+                let _ = restore_owner(&owner);
+            }
             previous(info);
         }));
     });

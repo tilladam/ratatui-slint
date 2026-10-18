@@ -169,7 +169,7 @@ fn timestamp() -> String {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rt = Runtime::new()?;
     let mut session = TerminalSession::init(TerminalOptions::default())?;
-    rt.spawn_terminal_reader();
+    rt.spawn_terminal_reader()?;
     let mut pane = rt.create_pane(&session.picker, DevicePanel::new)?;
     pane.set_scale(Scale::Fit {
         width: 800.0,
@@ -293,6 +293,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let res: Result<(), Box<dyn std::error::Error>> = (|| loop {
         match rt.next_event() {
             LoopEvent::Quit => return Ok(()),
+            LoopEvent::InputError(error) => return Err(error.into()),
             LoopEvent::Terminal(ev) => {
                 dirty = true;
                 if let Event::Resize(..) = ev
@@ -346,7 +347,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            LoopEvent::Wake | LoopEvent::Timeout => {}
+            _ => {}
         }
         for msg in rx.try_iter() {
             dirty = true;
@@ -394,6 +395,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let inner = panel_block.inner(panel_area);
         pane.set_area(inner);
         let changed = pane.update();
+        if let Some(error) = pane.last_error() {
+            return Err(std::io::Error::other(error).into());
+        }
         let host_changed = std::mem::take(&mut dirty);
         if !(changed || host_changed) {
             continue;
@@ -506,9 +510,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rt.write_pending_output(session.terminal.backend_mut())?;
     })();
     drop(pane); // queues deletion of its kitty image
-    rt.write_pending_output(session.terminal.backend_mut())?;
-    session.restore()?;
-    res
+    let cleanup = session.finish(&mut rt).map_err(Into::into);
+    res.and(cleanup)
 }
 
 /// Pushes a config value into the panel, as the device would after a config change.

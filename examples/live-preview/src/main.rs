@@ -129,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let mut rt = Runtime::new()?;
     let mut session = TerminalSession::init(TerminalOptions::default())?;
-    rt.spawn_terminal_reader();
+    rt.spawn_terminal_reader()?;
     let picker = session.picker.clone();
     let mut router = InputRouter::new();
     router.set_keyboard_enhanced(session.keyboard_enhanced);
@@ -176,6 +176,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut reload = rx.try_iter().count() > 0;
         match event {
             LoopEvent::Quit => return Ok(()),
+            LoopEvent::InputError(error) => return Err(error.into()),
             LoopEvent::Terminal(ev) => {
                 dirty = true;
                 if let Event::Resize(..) = ev
@@ -207,7 +208,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            LoopEvent::Wake | LoopEvent::Timeout => {}
+            _ => {}
         }
         if reload {
             build = compile(&path, component_name.as_deref());
@@ -241,6 +242,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         if let Some(p) = pane.as_mut() {
             p.set_area(inner);
             changed = p.update();
+            if let Some(error) = p.last_error() {
+                return Err(std::io::Error::other(error).into());
+            }
         }
         let host_changed = std::mem::take(&mut dirty);
         if !(changed || host_changed) {
@@ -331,9 +335,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rt.write_pending_output(session.terminal.backend_mut())?;
     })();
     drop(pane); // queues deletion of its kitty image
-    rt.write_pending_output(session.terminal.backend_mut())?;
-    session.restore()?;
-    res
+    let cleanup = session.finish(&mut rt).map_err(Into::into);
+    res.and(cleanup)
 }
 
 #[cfg(test)]

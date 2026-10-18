@@ -185,7 +185,7 @@ fn history_paths(history: &VecDeque<f32>) -> (SharedString, SharedString) {
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut rt = Runtime::new()?;
     let mut session = TerminalSession::init(TerminalOptions::default())?;
-    rt.spawn_terminal_reader();
+    rt.spawn_terminal_reader()?;
     let mut pane = rt.create_pane(&session.picker, Monitor::new)?;
     let mut router = InputRouter::new();
     router.set_keyboard_enhanced(session.keyboard_enhanced);
@@ -222,6 +222,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let res: Result<(), Box<dyn std::error::Error>> = (|| loop {
         match rt.next_event_capped(Some(Duration::from_secs(1))) {
             LoopEvent::Quit => return Ok(()),
+            LoopEvent::InputError(error) => return Err(error.into()),
             LoopEvent::Terminal(ev) => {
                 if let Event::Resize(..) = ev
                     && pane.protocol_type()
@@ -253,7 +254,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     }
                 }
             }
-            LoopEvent::Wake | LoopEvent::Timeout => {}
+            _ => {}
         }
         let bytes_per_sec = rate.sample(session.bytes.get());
         if !rt.begin_frame() {
@@ -269,6 +270,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         let inner = block.inner(right);
         pane.set_area(inner);
         let pane_changed = pane.update();
+        if let Some(error) = pane.last_error() {
+            return Err(std::io::Error::other(error).into());
+        }
         if pane_changed {
             frames += 1;
         }
@@ -324,9 +328,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         rt.write_pending_output(session.terminal.backend_mut())?;
     })();
     drop(pane); // queues deletion of its kitty image
-    rt.write_pending_output(session.terminal.backend_mut())?;
-    session.restore()?;
-    res
+    let cleanup = session.finish(&mut rt).map_err(Into::into);
+    res.and(cleanup)
 }
 
 /// Bytes per second written to the terminal, over the last second.

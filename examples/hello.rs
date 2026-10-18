@@ -41,48 +41,63 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .map(Duration::from_millis);
     let mut rt = Runtime::new()?;
     let mut session = TerminalSession::init(TerminalOptions::default())?;
-    rt.spawn_terminal_reader(); // after the terminal queries, which read stdin
+    rt.spawn_terminal_reader()?; // after the terminal queries, which read stdin
     let mut pane = rt.create_pane(&session.picker, Hello::new)?;
     let mut router = InputRouter::new();
     router.set_keyboard_enhanced(session.keyboard_enhanced);
     let started = Instant::now();
 
-    loop {
-        if panic_after.is_some_and(|d| started.elapsed() > d) {
-            panic!("requested test panic");
-        }
-        match rt.next_event_capped(panic_after.map(|_| Duration::from_millis(50))) {
-            LoopEvent::Quit => break,
-            LoopEvent::Terminal(ev) => {
-                if let Event::Resize(..) = ev
-                    && pane.protocol_type()
-                        != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
-                    && let Some(font) = ratatui_slint::terminal::cell_size()
-                {
-                    pane.set_font_size(font); // font zoom changes pixels per cell
+    let result: Result<(), Box<dyn std::error::Error>> = (|| {
+        loop {
+            if panic_after.is_some_and(|d| started.elapsed() > d) {
+                panic!("requested test panic");
+            }
+            match rt.next_event_capped(panic_after.map(|_| Duration::from_millis(50))) {
+                LoopEvent::Quit => break,
+                LoopEvent::InputError(error) => return Err(error.into()),
+                LoopEvent::Terminal(ev) => {
+                    if let Event::Resize(..) = ev
+                        && pane.protocol_type()
+                            != ratatui_slint::ratatui_image::picker::ProtocolType::Halfblocks
+                        && let Some(font) = ratatui_slint::terminal::cell_size()
+                    {
+                        pane.set_font_size(font); // font zoom changes pixels per cell
+                    }
+                    if router.route(&ev, &[&pane as &dyn PaneInput]) == Routed::Unhandled
+                        && let Event::Key(k) = ev
+                        && k.kind == KeyEventKind::Press
+                        && k.code == KeyCode::Char('q')
+                    {
+                        break;
+                    }
                 }
-                if router.route(&ev, &[&pane as &dyn PaneInput]) == Routed::Unhandled
-                    && let Event::Key(k) = ev
-                    && k.kind == KeyEventKind::Press
-                    && k.code == KeyCode::Char('q')
-                {
-                    break;
+                _ => {}
+            }
+            if rt.begin_frame() {
+                let area = Rect::from(session.terminal.size()?);
+                pane.set_area(area);
+                let changed = pane.update();
+                if let Some(error) = pane.last_error() {
+                    return Err(std::io::Error::other(error).into());
+                }
+                if changed {
+                    session
+                        .terminal
+                        .draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
                 }
             }
-            _ => {}
+            rt.write_pending_output(session.terminal.backend_mut())?;
         }
-        if rt.begin_frame() {
-            let area = Rect::from(session.terminal.size()?);
-            pane.set_area(area);
-            if pane.update() {
-                session
-                    .terminal
-                    .draw(|f| f.render_stateful_widget(SlintWidget, area, &mut pane))?;
-            }
-        }
-        rt.write_pending_output(session.terminal.backend_mut())?;
+        Ok(())
+    })();
+    if let Ok(expected) = std::env::var("RATATUI_SLINT_EXPECT_LEVEL") {
+        let expected: f32 = expected.parse()?;
+        assert!(
+            (pane.component().get_level() - expected).abs() < 0.001,
+            "scripted input did not change the UI"
+        );
     }
     drop(pane); // queues deletion of its kitty image
-    rt.write_pending_output(session.terminal.backend_mut())?;
-    Ok(())
+    let cleanup = session.finish(&mut rt).map_err(Into::into);
+    result.and(cleanup)
 }

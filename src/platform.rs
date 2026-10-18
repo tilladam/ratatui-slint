@@ -8,9 +8,9 @@
 use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -26,6 +26,7 @@ use crate::pane::SlintPane;
 /// Messages that wake the host loop.
 pub(crate) enum Msg {
     Terminal(Event),
+    InputError(std::io::Error),
     Invoke(Box<dyn FnOnce() + Send>),
     Wake,
     Quit,
@@ -46,6 +47,7 @@ impl Waker {
 
 /// What woke [`Runtime::next_event`].
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum LoopEvent {
     /// Input from the terminal reader thread.
     Terminal(Event),
@@ -54,7 +56,9 @@ pub enum LoopEvent {
     Wake,
     /// A Slint timer is due or the next animation frame is due.
     Timeout,
-    /// `slint::quit_event_loop()` was called, the terminal reader failed, or every sender is gone.
+    /// The terminal reader failed. The host should shut down and report the cause.
+    InputError(std::io::Error),
+    /// `slint::quit_event_loop()` was called, or every sender is gone.
     Quit,
 }
 
@@ -199,7 +203,7 @@ pub struct Runtime {
     frame_interval: Duration,
     last_frame: Option<Instant>,
     frame_pending: bool,
-    reader: Option<(Arc<AtomicBool>, JoinHandle<()>)>,
+    reader: Option<Arc<ReaderControl>>,
     owns_proxy: bool,
 }
 
@@ -208,6 +212,8 @@ impl Runtime {
     ///
     /// Slint keeps the platform per thread, so each thread may own one runtime. The first runtime
     /// in the process also becomes the target of `slint::invoke_from_event_loop`.
+    /// Installation is permanent: dropping a Runtime does not free either Slint slot, and a
+    /// second Runtime on the same thread is an error. Use Waker for a particular runtime.
     pub fn new() -> Result<Self, Error> {
         let (tx, rx) = mpsc::channel();
         let shared = Rc::new(Shared {
@@ -298,27 +304,40 @@ impl Runtime {
     ///
     /// Call this after any terminal query that reads stdin, such as
     /// [`Picker::from_query_stdio`]; the reader would otherwise swallow the replies.
-    pub fn spawn_terminal_reader(&mut self) {
-        if self.reader.is_some() {
-            return;
+    pub fn spawn_terminal_reader(&mut self) -> std::io::Result<()> {
+        if self
+            .reader
+            .as_ref()
+            .is_some_and(|r| !r.stop.load(Ordering::Acquire))
+        {
+            return Ok(());
         }
-        let stop = Arc::new(AtomicBool::new(false));
+        let control = Arc::new(ReaderControl::default());
         let tx = self.tx.clone();
-        let flag = stop.clone();
+        let worker = control.clone();
         let handle = std::thread::Builder::new()
             .name("ratatui-slint-input".into())
             .spawn(move || {
-                read_terminal_events(&flag, &tx, crossterm::event::poll, crossterm::event::read)
-            })
-            .expect("spawn input thread");
-        self.reader = Some((stop, handle));
+                read_terminal_events(
+                    &worker.stop,
+                    &tx,
+                    crossterm::event::poll,
+                    crossterm::event::read,
+                )
+            })?;
+        *control.handle.lock().unwrap_or_else(|e| e.into_inner()) = Some(handle);
+        if let Err(error) = crate::terminal::attach_reader(&control) {
+            control.stop();
+            return Err(error);
+        }
+        self.reader = Some(control);
+        Ok(())
     }
 
     /// Stops the terminal reader thread and waits for it, so it no longer reads stdin.
     pub fn stop_terminal_reader(&mut self) {
-        if let Some((stop, handle)) = self.reader.take() {
-            stop.store(true, Ordering::Relaxed);
-            let _ = handle.join();
+        if let Some(reader) = self.reader.take() {
+            reader.stop();
         }
     }
 
@@ -379,6 +398,7 @@ impl Runtime {
     fn handle(&mut self, msg: Msg) -> LoopEvent {
         match msg {
             Msg::Terminal(ev) => LoopEvent::Terminal(ev),
+            Msg::InputError(e) => LoopEvent::InputError(e),
             Msg::Invoke(f) => {
                 f();
                 LoopEvent::Wake
@@ -456,6 +476,25 @@ impl Drop for Runtime {
     }
 }
 
+/// Shared only with terminal restoration so unwind/panic cleanup stops stdin first.
+#[derive(Default)]
+pub(crate) struct ReaderControl {
+    stop: AtomicBool,
+    handle: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl ReaderControl {
+    pub(crate) fn stop(&self) {
+        self.stop.store(true, Ordering::Release);
+        let handle = self.handle.lock().unwrap_or_else(|e| e.into_inner()).take();
+        if let Some(handle) = handle
+            && handle.thread().id() != std::thread::current().id()
+        {
+            let _ = handle.join();
+        }
+    }
+}
+
 fn read_terminal_events(
     stop: &AtomicBool,
     tx: &Sender<Msg>,
@@ -475,11 +514,11 @@ fn read_terminal_events(
                 }
             }
             Err(e) if e.kind() == std::io::ErrorKind::Interrupted => continue,
-            Err(_) => {
+            Err(e) => {
                 // Runtime and its platform retain senders, so exiting the reader alone cannot
                 // disconnect the channel. Wake a blocked host explicitly.
                 if !stop.load(Ordering::Relaxed) {
-                    let _ = tx.send(Msg::Quit);
+                    let _ = tx.send(Msg::InputError(e));
                 }
                 return;
             }
@@ -492,7 +531,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn terminal_reader_errors_terminate_the_host_loop() {
+    fn terminal_reader_errors_reach_the_host_with_their_cause() {
         for poll_fails in [true, false] {
             let (tx, rx) = mpsc::channel();
             read_terminal_events(
@@ -507,7 +546,12 @@ mod tests {
                 },
                 || Err(std::io::Error::other("read failed")),
             );
-            assert!(matches!(rx.try_recv(), Ok(Msg::Quit)));
+            let expected = if poll_fails {
+                "poll failed"
+            } else {
+                "read failed"
+            };
+            assert!(matches!(rx.try_recv(), Ok(Msg::InputError(e)) if e.to_string() == expected));
         }
     }
 
@@ -541,6 +585,6 @@ mod tests {
             || Ok(Event::FocusLost),
         );
         assert!(matches!(rx.try_recv(), Ok(Msg::Terminal(Event::FocusLost))));
-        assert!(matches!(rx.try_recv(), Ok(Msg::Quit)));
+        assert!(matches!(rx.try_recv(), Ok(Msg::InputError(_))));
     }
 }
