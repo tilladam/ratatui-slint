@@ -86,3 +86,24 @@ Next time: compile the test executable before entering the pseudo-terminal, reso
 Revisit when: the harness separately budgets compilation and program execution.
 Cost: one 30-second timeout and a rerun of the terminal-session check.
 Scope: global-candidate     Status: active
+
+## 2026-10-18 · Repeating a CI-only encoder race locally never reproduced it · #tests/output.rs #src/encode.rs #testing
+Situation: tests/output.rs asserted on frames() right after SlintPane::update() with a threaded sixel encoder; hosted CI failed it 3 times (macOS and Ubuntu runners).
+Tried: running the test binary 300 times serially and 600 times with 24 in parallel on the local Mac.
+Outcome: 0 failures in 900 runs, so repetition gave no baseline to test a fix against.
+Evidence: 2026-10-18; a temporary 100 ms sleep between Encoder::submit and take_latest in SlintPane::update failed the old tests with the exact CI values (left: 1, left: 2) and passed the fixed ones.
+Hypothesis: the local machine always reaches take_latest before the worker finishes a small frame; slow CI runners do not.
+Next time: verified — force the suspected interleaving with a temporary probe (sleep at the race window), run old and new tests under it, then remove the probe and grep that it is gone.
+Revisit when: never for thread-interleaving races.
+Cost: two runs of several minutes.
+Scope: global-candidate     Status: active
+
+## 2026-10-18 · zsh loop variable did not split into cargo arguments · #shell #testing
+Situation: running cargo test for several flag sets in one Bash call; the user's shell is zsh.
+Tried: `for args in "--workspace --all-features" ...; do cargo test $args; done`.
+Outcome: zsh passed each string as one argument; cargo rejected it, and a grep/awk summary printed empty counts that looked like results.
+Evidence: 2026-10-18; rerunning with `${=args}` gave 60/51/52 passed.
+Next time: verified — use `${=args}` (or arrays) in zsh, and check each command's exit status rather than only a filtered summary.
+Revisit when: the tool shell is bash.
+Cost: one wasted multi-minute run.
+Scope: global-candidate     Status: active
