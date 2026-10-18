@@ -60,10 +60,12 @@ fn frames_encoded_for_an_old_size_are_dropped() {
     pane.set_encode_mode(EncodeMode::Threaded).unwrap();
     pane.set_area(Rect::new(0, 0, 60, 10));
     pane.update(); // submits a 600 × 200 px frame
+    // A fast worker may already have delivered it; otherwise it is still in flight.
+    let before = pane.frames();
     pane.set_area(Rect::new(0, 0, 30, 5)); // resize before it finishes
     assert!(wait_for_frame(&mut rt, &mut pane));
-    // Only the frame for the new size was accepted.
-    assert_eq!(pane.frames(), 1);
+    // Only the frame for the new size was accepted after the resize.
+    assert_eq!(pane.frames(), before + 1);
     assert_eq!(
         pane.displayed_cells(),
         Some(ratatui::layout::Size::new(30, 5))
@@ -121,21 +123,24 @@ fn every_protocol_encodes() {
 }
 
 #[test]
-fn encode_mode_auto_threads_slow_protocols_only() {
+fn encode_mode_auto_delivers_inline_and_threaded_frames() {
     let mut rt = Runtime::new().unwrap();
     // Half-blocks: inline, so the first update already has the frame.
     let mut hb = rt.create_pane(&halfblocks(), Still::new).unwrap();
     hb.set_area(Rect::new(0, 0, 10, 3));
     let _ = rt.begin_frame();
     assert!(hb.update());
-    // Sixel: threaded, delivered through a wake-up.
+    // Sixel: threaded, delivered through a wake-up unless the worker already finished. Which
+    // protocols Auto threads is unit-tested in encode.rs, where it does not depend on timing.
     let mut sx = rt
         .create_pane(&picker(ProtocolType::Sixel), Still::new)
         .unwrap();
     sx.set_area(Rect::new(0, 0, 10, 3));
     sx.update();
-    assert_eq!(sx.frames(), 0, "sixel should not encode on the UI thread");
-    assert!(wait_for_frame(&mut rt, &mut sx));
+    if sx.frames() == 0 {
+        assert!(wait_for_frame(&mut rt, &mut sx));
+    }
+    assert_eq!(sx.frames(), 1);
 }
 
 #[cfg(feature = "transparency")]

@@ -9,6 +9,7 @@ use std::sync::{Arc, Condvar, Mutex};
 
 use image::DynamicImage;
 use ratatui::layout::Size;
+use ratatui_image::picker::ProtocolType;
 use ratatui_image::protocol::StatefulProtocol;
 use ratatui_image::{Resize, ResizeEncodeRender};
 
@@ -25,6 +26,17 @@ pub enum EncodeMode {
     Inline,
     /// Always on a worker thread.
     Threaded,
+}
+
+impl EncodeMode {
+    /// Whether frames for `protocol` encode on a worker thread.
+    pub(crate) fn threaded(self, protocol: ProtocolType) -> bool {
+        match self {
+            EncodeMode::Inline => false,
+            EncodeMode::Threaded => true,
+            EncodeMode::Auto => protocol != ProtocolType::Halfblocks,
+        }
+    }
 }
 
 #[cfg(not(feature = "transparency"))]
@@ -470,6 +482,20 @@ fn to_image(width: u32, height: u32, bytes: Vec<u8>, has_alpha: bool) -> Option<
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn auto_mode_threads_every_protocol_but_half_blocks() {
+        assert!(!EncodeMode::Auto.threaded(ProtocolType::Halfblocks));
+        assert!(EncodeMode::Threaded.threaded(ProtocolType::Halfblocks));
+        for protocol in [
+            ProtocolType::Sixel,
+            ProtocolType::Kitty,
+            ProtocolType::Iterm2,
+        ] {
+            assert!(EncodeMode::Auto.threaded(protocol), "{protocol:?}");
+            assert!(!EncodeMode::Inline.threaded(protocol), "{protocol:?}");
+        }
+    }
 
     #[test]
     fn worker_panic_and_poison_wake_host_and_preserve_cause() {

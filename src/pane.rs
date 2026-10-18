@@ -232,8 +232,8 @@ impl<C: ComponentHandle> SlintPane<C> {
             .new_resize_protocol(image::DynamicImage::new_rgb8(1, 1))
             .protocol_type_owned();
         let encode_mode = EncodeMode::Auto;
-        let encoder =
-            Encoder::new(Self::threaded(encode_mode, &picker), waker.clone()).map_err(|error| {
+        let encoder = Encoder::new(encode_mode.threaded(picker.protocol_type()), waker.clone())
+            .map_err(|error| {
                 let _ = component.hide();
                 crate::Error::from(error)
             })?;
@@ -269,14 +269,6 @@ impl<C: ComponentHandle> SlintPane<C> {
         pane.window
             .dispatch_event(WindowEvent::ScaleFactorChanged { scale_factor: 1.0 });
         Ok(pane)
-    }
-
-    fn threaded(mode: EncodeMode, picker: &Picker) -> bool {
-        match mode {
-            EncodeMode::Inline => false,
-            EncodeMode::Threaded => true,
-            EncodeMode::Auto => picker.protocol_type() != ProtocolType::Halfblocks,
-        }
     }
 
     /// The Slint component.
@@ -355,7 +347,10 @@ impl<C: ComponentHandle> SlintPane<C> {
 
     /// Chooses where encoding runs. Pending frames from the old encoder are dropped.
     pub fn set_encode_mode(&mut self, mode: EncodeMode) -> Result<(), crate::Error> {
-        let encoder = Encoder::new(Self::threaded(mode, &self.picker), self.waker.clone())?;
+        let encoder = Encoder::new(
+            mode.threaded(self.picker.protocol_type()),
+            self.waker.clone(),
+        )?;
         self.encoder = encoder;
         self.generation += 1;
         self.window.request_redraw();
