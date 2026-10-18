@@ -32,7 +32,7 @@ pub enum Routed {
 /// A key combination, compared against press events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyBinding {
-    /// The key.
+    /// The key that must be pressed.
     pub code: KeyCode,
     /// The modifiers that must be held, exactly.
     pub modifiers: KeyModifiers,
@@ -161,7 +161,8 @@ impl Default for InputRouter {
 }
 
 impl InputRouter {
-    /// A router with no focused pane, the default exit key and 3 lines per wheel step.
+    /// A router with no focused pane, [`DEFAULT_EXIT_KEY`] as the exit key and 3 lines per wheel
+    /// step.
     pub fn new() -> Self {
         Self {
             focused: None,

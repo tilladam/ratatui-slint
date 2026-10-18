@@ -1,9 +1,9 @@
 [package]
 name = "ratatui-slint"
 version = "0.1.0"
-edition = "2024"
+edition.workspace = true
 rust-version = "1.92"
-license = "MIT OR Apache-2.0"
+license.workspace = true
 description = "Embed Slint components as pixel widgets inside ratatui applications"
 repository = "https://github.com/tilladam/ratatui-slint"
 readme = "README.md"
@@ -47,6 +47,10 @@ required-features = ["image-decoders"]
 [workspace]
 members = ["examples/live-preview"]
 exclude = ["spike"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT OR Apache-2.0"
 
 [profile.dev.package."*"]
 opt-level = 2

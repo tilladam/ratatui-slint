@@ -179,7 +179,7 @@ The main risk is output bandwidth for animated panes over SSH; the rest are mana
 
 - [ ] Primary use case: embedded-device SSH console, developer tool, or general-purpose crate? It sets the terminal matrix and the bandwidth budget.
 - [ ] Ownership: standalone open-source crate, Slint upstream example, or ratatui ecosystem crate?
-- [x] Licence of the crate itself: MIT, decided 2026-10-11; MIT OR Apache-2.0 since 2026-10-18. Still open: guidance on the Slint licence users need.
+- [x] Licence of the crate itself: MIT OR Apache-2.0, decided 2026-10-18. Still open: guidance on the Slint licence users need.
 - [ ] Target terminals and whether tmux is a must-have. Must be answered before Phase 3 starts, not Phase 4; it decides what the bandwidth work targets.
 - [ ] SSH bandwidth budget for an animated pane. Must be answered before Phase 3 starts; it decides whether the partial-update prototype is needed at all.
 - [ ] Is sub-cell mouse precision (SGR-Pixels mode) worth a custom input parser?

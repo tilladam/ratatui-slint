@@ -262,7 +262,7 @@ impl<C: ComponentHandle> SlintPane<C> {
         &self.component
     }
 
-    /// The pane's identity, for input routing and focus.
+    /// The pane's identity, stable for its lifetime.
     pub fn id(&self) -> PaneId {
         self.id
     }
