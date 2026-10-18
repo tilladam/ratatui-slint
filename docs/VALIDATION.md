@@ -20,12 +20,22 @@ matrix covers half-blocks, sixel, Kitty and iTerm2, enhanced key events with an 
 focus transitions, terminal-session reinitialization, and panic restoration. The session test is
 ignored by ordinary cargo test and is run explicitly inside the fake terminal by smoke.sh.
 
+## Hosted CI — 2026-10-18
+
+GitHub Actions run 39140419410 on commit 1993e00 passed every job: the full gate above on
+ubuntu-latest and macos-latest (on macOS, all 27 smoke cases and the six harness tests), the
+Rust 1.92 check, and the newest-compatible dependency job. It was the first fully green hosted
+run. Earlier runs failed on macOS because a frame-rate bound was tuned on a fast machine, and on
+both systems because two tests raced the encoder worker; both were test defects, fixed in c77bad0
+and 71002d2.
+
 ## Local results — 2026-10-18
 
 macOS local validation passed:
 
-- Workspace tests: 58 passed with defaults, 59 with all features (including doctests).
-- Isolated library-package tests: 50 passed without defaults, 51 with alpha only.
+- Workspace tests: 59 passed with defaults, 60 with all features (including doctests), after the
+  test fixes above.
+- Isolated library-package tests: 51 passed without defaults, 52 with alpha only.
 - Formatting and Clippy across all targets/features, with warnings denied.
 - Rust 1.92 library check and fresh-consumer resolution; stable consumer output and README checks.
 - Six Python harness tests and all 27 pseudo-terminal smoke cases.
@@ -35,8 +45,7 @@ macOS local validation passed:
   newest-compatible dependencies, independently of the repository lockfile.
 
 Ordinary test runs intentionally ignore the pty-only session test (covered by smoke.sh) and a
-one-line widget rustdoc illustration; the complete application is compiled separately. The
-Linux/macOS CI jobs are configured, but hosted Linux CI was not executed from this checkout.
+one-line widget rustdoc illustration; the complete application is compiled separately.
 
 ## Real-terminal gate
 
