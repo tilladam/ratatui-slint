@@ -1,0 +1,43 @@
+use ratatui_slint::{EncodeMode, Framebuffer, Runtime, SlintWidget};
+use ratatui_slint::ratatui_image::picker::{Picker, ProtocolType};
+use ratatui::{buffer::Buffer, layout::Rect, widgets::StatefulWidget};
+use base64::Engine;
+
+slint::slint! {
+    export component Clear inherits Window { background: #ff000080; }
+}
+
+fn png(pane: &mut ratatui_slint::SlintPane<Clear>) -> image::RgbaImage {
+    assert!(pane.update());
+    let area = pane.area();
+    let mut buffer = Buffer::empty(Rect::new(0, 0, 4, 3));
+    SlintWidget.render(area, &mut buffer, pane);
+    let seq = buffer[(0, 0)].symbol();
+    let data = seq.split_once(':').unwrap().1.trim_end_matches('\x07');
+    let bytes = base64::engine::general_purpose::STANDARD.decode(data).unwrap();
+    image::load_from_memory(&bytes).unwrap().to_rgba8()
+}
+
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let rt = Runtime::new()?;
+    let mut picker = Picker::halfblocks();
+    picker.set_protocol_type(ProtocolType::Iterm2);
+    let mut pane = rt.create_pane(&picker, Clear::new)?;
+    pane.set_encode_mode(EncodeMode::Inline)?;
+    pane.set_area(Rect::new(0, 0, 4, 2));
+    let opaque = png(&mut pane);
+    assert_eq!(opaque.get_pixel(0, 0).0, [128, 0, 0, 255]);
+    // Identical source and borrowed-view methods compile in all configurations.
+    let frame: Framebuffer<'_> = pane.framebuffer();
+    let _: Option<&[slint::Rgb8Pixel]> = frame.rgb();
+    let _: Option<&[slint::platform::software_renderer::PremultipliedRgbaColor]> = frame.premultiplied_rgba();
+    assert!(!frame.is_empty());
+    if std::env::var_os("EXPECT_ALPHA").is_some() {
+        pane.set_transparency(true)?;
+        let transparent = png(&mut pane);
+        assert_eq!(transparent.get_pixel(0, 0).0, [255, 0, 0, 128]);
+    } else {
+        assert!(pane.set_transparency(true).is_err());
+    }
+    Ok(())
+}

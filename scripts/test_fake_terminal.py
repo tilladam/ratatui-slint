@@ -1,7 +1,7 @@
 import unittest
 from types import SimpleNamespace
 
-from fake_terminal import last_screen, validate_checks
+from fake_terminal import enhanced_key, last_screen, validate_checks
 
 
 class SmokeAssertions(unittest.TestCase):
@@ -9,6 +9,15 @@ class SmokeAssertions(unittest.TestCase):
         values = dict(expect_exit=0, expect=[], require=[], protocol="kitty", expect_idle=[])
         values.update(overrides)
         return SimpleNamespace(**values)
+
+    def test_enhanced_keys_encode_modifiers_and_event_kind(self):
+        self.assertEqual(enhanced_key(103, 5, 3), b"\x1b[103;5:3u")
+
+    def test_keyboard_stack_is_required_and_iterm2_counts_as_graphics(self):
+        checks = {"exit status": 0, "keyboard pushed": True, "keyboard popped": False,
+                  "iterm2 data": True}
+        self.assertEqual(validate_checks(checks, "", {}, self.args(
+            protocol="iterm2", require=["graphics", "keyboard-restore"])), ["keyboard popped"])
 
     def test_missing_graphics_and_restore_fail(self):
         checks = {"exit status": 0, "kitty transmit": False,

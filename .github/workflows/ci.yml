@@ -29,6 +29,12 @@ jobs:
       - run: cargo test --workspace
       - run: cargo test --workspace --all-features
       - run: cargo test -p ratatui-slint --no-default-features
+      - run: cargo test -p ratatui-slint --no-default-features --features transparency
+      - run: python3 scripts/check_consumer.py
+      - run: cargo doc -p ratatui-slint --all-features --no-deps
+        env:
+          RUSTDOCFLAGS: -D warnings
+      - run: cargo package -p ratatui-slint
       - run: python3 -m unittest discover -s scripts -p 'test_*.py'
       - run: ./scripts/smoke.sh
 
@@ -40,3 +46,18 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev
       - run: cargo check -p ratatui-slint --lib --all-features --locked
+      - run: python3 scripts/check_consumer.py --toolchain 1.92 --check-only
+
+  newest-compatible:
+    runs-on: ubuntu-latest
+    env:
+      # Exercise the whole semver range on stable, including releases above our own MSRV.
+      CARGO_RESOLVER_INCOMPATIBLE_RUST_VERSIONS: allow
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - run: sudo apt-get update && sudo apt-get install -y libfontconfig1-dev fonts-dejavu-core
+      # This job's disposable checkout intentionally resolves beyond the repository lockfile.
+      - run: cargo update
+      - run: cargo test -p ratatui-slint --all-features

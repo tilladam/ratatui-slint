@@ -5,13 +5,16 @@ Answers the queries ratatui-image and crossterm send at startup (device attribut
 cursor position, kitty graphics), so an example can be smoke-tested without a real terminal.
 Sends scripted input, records everything the program writes, and reports checks.
 
-    scripts/fake_terminal.py [--protocol none|sixel|kitty] [--cols 120] [--rows 40]
+    scripts/fake_terminal.py [--protocol none|sixel|kitty|iterm2] [--cols 120] [--rows 40]
                              [--script "2:click 70 10;3:key +;5:key q"] [--timeout 20]
                              [--log out.bin] -- ./target/debug/examples/sysmon
 
 Script steps are "<seconds>:<action>", separated by ';'. Actions:
   key <text>        send text (escapes like \\x1b allowed)
   click <col> <row> SGR mouse press and release, 1-based terminal cells
+  enhanced <code> [modifiers] [kind]  CSI-u key event (defaults: 1, 1)
+  focus lost|gained                  terminal focus report
+  press|release <col> <row>          individual mouse events
   paste <text>      bracketed paste
   mark <name>       record the output byte count under <name> (for idle measurements)
   run <command>     run a shell command (e.g. edit a watched file)
@@ -28,6 +31,11 @@ import struct
 import sys
 import termios
 import time
+
+
+def enhanced_key(code, modifiers=1, kind=1):
+    """CSI-u key event: modifier mask plus one; kind 1=press, 2=repeat, 3=release."""
+    return f"\x1b[{code};{modifiers}:{kind}u".encode()
 
 
 def parse_script(text):
@@ -84,7 +92,8 @@ def last_screen(d, rows, cols):
 
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument("--protocol", default="none", choices=["none", "sixel", "kitty"])
+    ap.add_argument("--protocol", default="none", choices=["none", "sixel", "kitty", "iterm2"])
+    ap.add_argument("--keyboard-enhanced", action="store_true", help="answer kitty keyboard negotiation")
     ap.add_argument("--cols", type=int, default=120)
     ap.add_argument("--rows", type=int, default=40)
     ap.add_argument("--cell", default="10x20", help="cell size in pixels, WxH")
@@ -95,7 +104,7 @@ def main():
     ap.add_argument("--env", action="append", default=[], help="NAME=VALUE for the child")
     ap.add_argument("--expect", action="append", default=[], help="text that must appear on screen")
     ap.add_argument("--expect-exit", type=int, default=0, help="expected child exit code")
-    ap.add_argument("--require", action="append", default=[], choices=["graphics", "restore", "input-restore"])
+    ap.add_argument("--require", action="append", default=[], choices=["graphics", "restore", "input-restore", "keyboard-restore"])
     ap.add_argument("--expect-idle", action="append", default=[], help="START:END marks between which zero bytes may be written")
     ap.add_argument("cmd", nargs=argparse.REMAINDER)
     args = ap.parse_args()
@@ -107,6 +116,8 @@ def main():
         for kv in args.env:
             k, v = kv.split("=", 1)
             os.environ[k] = v
+        if args.protocol == "iterm2":
+            os.environ["RATATUI_SLINT_PROTOCOL"] = "iterm2"
         os.environ["TERM"] = "xterm-256color"
         os.execvp(cmd[0], cmd)
 
@@ -131,6 +142,17 @@ def main():
             verb, _, rest = action.partition(" ")
             if verb == "key":
                 send(rest.encode().decode("unicode_escape").encode())
+            elif verb == "enhanced":
+                parts = rest.split()
+                code = int(parts[0])
+                modifiers = int(parts[1]) if len(parts) > 1 else 1
+                kind = int(parts[2]) if len(parts) > 2 else 1
+                send(enhanced_key(code, modifiers, kind))
+            elif verb == "focus":
+                send(b"\x1b[I" if rest == "gained" else b"\x1b[O")
+            elif verb in ("press", "release"):
+                c, r = rest.split()
+                send(f"\x1b[<0;{c};{r}{'M' if verb == 'press' else 'm'}".encode())
             elif verb == "click":
                 c, r = rest.split()
                 send(f"\x1b[<0;{c};{r}M\x1b[<0;{c};{r}m".encode())
@@ -171,7 +193,9 @@ def main():
             if b"\x1b[14t" in chunk:
                 send(f"\x1b[4;{args.rows * ch};{args.cols * cw}t".encode())
             if b"\x1b[?u" in chunk:
-                pass  # no kitty keyboard protocol: no reply, like most terminals
+                if args.keyboard_enhanced:
+                    send(b"\x1b[?0u")
+                    replies.append("keyboard")
             if b"\x1b[c" in chunk:
                 send(b"\x1b[?62;4;22c" if args.protocol == "sixel" else b"\x1b[?62;22c")
                 replies.append("da1")
@@ -216,6 +240,9 @@ def main():
         "focus reporting off": b"\x1b[?1004l" in d,
         "half-block glyphs": "▀".encode() in d,
         "sixel data": b"\x1bP" in d and b"q\"" in d,
+        "iterm2 data": b"\x1b]1337;File=inline=1;" in d,
+        "keyboard pushed": bool(re.search(rb"\x1b\[>[0-9]+u", d)),
+        "keyboard popped": b"\x1b[<1u" in d,
         "kitty transmit": b"\x1b_Ga=T" in d or b",a=T," in d,
     }
     screen = last_screen(d, args.rows, args.cols)
@@ -245,9 +272,10 @@ def validate_checks(checks, screen, marks, args):
         if not checks[key]:
             failed.append(key)
     required = {
-        "graphics": [{"none": "half-block glyphs", "sixel": "sixel data", "kitty": "kitty transmit"}[args.protocol]],
+        "graphics": [{"none": "half-block glyphs", "sixel": "sixel data", "kitty": "kitty transmit", "iterm2": "iterm2 data"}[args.protocol]],
         "restore": ["entered alt screen", "left alt screen"],
         "input-restore": ["mouse capture off", "bracketed paste off", "focus reporting off"],
+        "keyboard-restore": ["keyboard pushed", "keyboard popped"],
     }
     for name in args.require:
         failed.extend(key for key in required[name] if not checks[key])
