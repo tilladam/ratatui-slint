@@ -41,6 +41,9 @@ Slint dependency shown in README.md; importing only the reexport is insufficient
 - Half-blocks are ordinary cells and follow ratatui's diff. Text inside them has low resolution;
   use ratatui text for content that must remain legible without a graphics protocol.
 - Sixel/iTerm2 are one escape payload in the first cell, with other covered cells skipped.
+  While another widget covers that first cell, the image cannot be updated: the last frame
+  stays visible beneath the overlay and the pane appears frozen. Kitty placeholders keep
+  animating around an overlay.
   After hiding an overlay, call pane.invalidate(), then update and draw. This wakes an idle
   runtime and retransmits existing encoded data. Repeated calls before drawing coalesce.
   Ordinary unchanged frames send no image payload.

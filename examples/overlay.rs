@@ -1,5 +1,7 @@
 //! Toggle a ratatui overlay over an animated Slint pane: `o` toggles, `q` quits.
 //! Demonstrates explicit sixel/iTerm2 damage and Kitty uploads under first-cell occlusion.
+//! Sixel and iTerm2 draw the image from the pane's first cell, which the overlay covers, so
+//! those panes freeze until the overlay is hidden; Kitty keeps animating around it.
 use crossterm::event::{Event, KeyCode, KeyEventKind};
 use ratatui::{
     layout::Rect,

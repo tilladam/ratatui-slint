@@ -67,6 +67,10 @@ transfer; final-pane removal and recreation; normal/error exit and panic restore
 terminal intercepting Shift+click from an event delivered incorrectly by the router. Check
 idle output and image cleanup as well as appearance.
 
+Expected overlay behaviour in examples/overlay.rs differs by protocol. Kitty keeps animating
+around the overlay box. Sixel and iTerm2 draw the whole image from the first cell, which the box
+covers, so the pane stays frozen until `o` hides the box and then animates again; that is a pass.
+
 Run a current RustSec advisory audit before publishing. cargo-audit was not installed in the
 local implementation environment; lack of a local audit is not evidence of no advisories.
 Publication remains separate from implementation and requires these remaining release checks.
