@@ -5,7 +5,7 @@
 //! [`Runtime::next_event`], which blocks on one channel that carries terminal input, closures
 //! from [`slint::invoke_from_event_loop`], encoder completions and application wake-ups.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::io::Write;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
@@ -110,10 +110,14 @@ static PROXY_CLAIMED: AtomicBool = AtomicBool::new(false);
 
 struct Proxy {
     tx: Sender<Msg>,
+    explicit_quit: bool,
 }
 
 impl EventLoopProxy for Proxy {
     fn quit_event_loop(&self) -> Result<(), EventLoopError> {
+        if !self.explicit_quit {
+            return Ok(());
+        }
         self.tx
             .send(Msg::Quit)
             .map_err(|_| EventLoopError::EventLoopTerminated)
@@ -132,6 +136,7 @@ impl EventLoopProxy for Proxy {
 struct TermPlatform {
     shared: Rc<Shared>,
     proxy_tx: Option<Sender<Msg>>,
+    first_proxy: Cell<bool>,
 }
 
 impl Platform for TermPlatform {
@@ -145,9 +150,15 @@ impl Platform for TermPlatform {
     }
 
     fn new_event_loop_proxy(&self) -> Option<Box<dyn EventLoopProxy>> {
+        // Slint 1.18 obtains the global proxy during set_platform before asking for
+        // context-local proxies (last-window shutdown and spawn_local). Embedded
+        // windows must not terminate the host; explicit quit must still work.
+        // This call order is undocumented: tests/invoke_from_event_loop.rs guards
+        // it against both locked and newest-compatible dependency versions.
+        let explicit_quit = self.first_proxy.replace(false);
         self.proxy_tx
             .clone()
-            .map(|tx| Box::new(Proxy { tx }) as Box<dyn EventLoopProxy>)
+            .map(|tx| Box::new(Proxy { tx, explicit_quit }) as Box<dyn EventLoopProxy>)
     }
 
     fn set_clipboard_text(&self, text: &str, clipboard: Clipboard) {
@@ -209,6 +220,7 @@ impl Runtime {
         let platform = TermPlatform {
             shared: shared.clone(),
             proxy_tx: owns_proxy.then(|| tx.clone()),
+            first_proxy: Cell::new(true),
         };
         if let Err(e) = slint::platform::set_platform(Box::new(platform)) {
             if owns_proxy {
