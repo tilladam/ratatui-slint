@@ -7,8 +7,8 @@
 //! it are watched; on save the UI is recompiled with `slint-interpreter` and swapped in. Compile
 //! errors keep the last good UI on screen and show the diagnostics.
 //!
-//! Keys (when the preview is not focused): `r` reloads, `s` cycles the scale (1×, 2×, fit to
-//! 800 × 480), `q` quits. Click the preview to interact with it; Ctrl+G leaves it.
+//! Keys (when the preview is not focused): `r` reloads, `s` cycles the scale (auto, 1×, 2×, fit
+//! to 800 × 480), `q` quits. Click the preview to interact with it; Ctrl+G leaves it.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
@@ -141,7 +141,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         });
     }
 
+    // Auto first: Slint text matches the terminal's text. 1× shows a design pixel-exact.
     let scales = [
+        Scale::Auto,
         Scale::Fixed(1.0),
         Scale::Fixed(2.0),
         Scale::Fit {
