@@ -11,5 +11,6 @@ loss under overlays. Framebuffer access has one stable borrowed view across Carg
 alpha output requires explicit per-pane opt-in. Input/thread errors are surfaced and error causes
 preserved. Stable Kitty IDs and unconditional broad image decoders have been removed.
 
-Linux/macOS are the release targets. The current real-terminal validation matrix is pending;
-Windows, tmux and SSH remain unverified. See docs/INTEGRATION.md and docs/VALIDATION.md.
+Linux/macOS are the release targets. Real terminals were validated on macOS (kitty, Ghostty,
+WezTerm, iTerm2, Terminal.app); Linux is covered by CI and the fake terminal only. Windows, tmux
+and SSH remain unverified. See docs/INTEGRATION.md and docs/VALIDATION.md.
