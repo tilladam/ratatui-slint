@@ -20,6 +20,7 @@ use crate::pane::{PaneId, PaneInput};
 
 /// What happened to an event.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Routed {
     /// A pane used it. ratatui should ignore it.
     Consumed,
@@ -134,6 +135,14 @@ fn contains(area: Rect, col: u16, row: u16) -> bool {
     col >= area.x && col < area.right() && row >= area.y && row < area.bottom()
 }
 
+fn button_mask(b: MouseButton) -> u8 {
+    match b {
+        MouseButton::Left => 1,
+        MouseButton::Right => 2,
+        MouseButton::Middle => 4,
+    }
+}
+
 fn button(b: MouseButton) -> PointerEventButton {
     match b {
         MouseButton::Left => PointerEventButton::Left,
@@ -147,6 +156,7 @@ pub struct InputRouter {
     focused: Option<PaneId>,
     captured: Option<(PaneId, MouseButton)>,
     hovered: Option<PaneId>,
+    canceled_buttons: u8,
     /// Modifiers Slint currently believes are held, per the events we sent it.
     held: KeyModifiers,
     exit_key: Option<KeyBinding>,
@@ -168,6 +178,7 @@ impl InputRouter {
             focused: None,
             captured: None,
             hovered: None,
+            canceled_buttons: 0,
             held: KeyModifiers::empty(),
             exit_key: Some(DEFAULT_EXIT_KEY),
             keyboard_enhanced: false,
@@ -220,9 +231,17 @@ impl InputRouter {
         }
     }
 
-    /// Routes one event. Pass every pane that is currently on screen.
+    /// Routes one event. Pass every visible pane; the first matching area wins overlaps.
+    /// Mouse modifiers go through the keyboard-focused window. With no keyboard focus they
+    /// go through the pointer target for that event, without changing keyboard focus.
     pub fn route(&mut self, event: &Event, panes: &[&dyn PaneInput]) -> Routed {
-        // Forget panes that are gone.
+        // Forget panes that are gone. Reconcile context-wide modifiers before another target.
+        if self.focused.is_some_and(|id| find(panes, id).is_none()) {
+            if let Some(p) = panes.first() {
+                self.release_modifiers(*p);
+            }
+            self.held = KeyModifiers::empty();
+        }
         for slot in [&mut self.focused, &mut self.hovered] {
             if slot.is_some_and(|id| find(panes, id).is_none()) {
                 *slot = None;
@@ -231,14 +250,36 @@ impl InputRouter {
         if self
             .captured
             .is_some_and(|(id, _)| find(panes, id).is_none())
+            && let Some((_, b)) = self.captured.take()
         {
-            self.captured = None;
+            self.canceled_buttons |= button_mask(b);
         }
         match event {
             Event::Key(k) => self.route_key(k, panes),
-            Event::Mouse(m) => self.route_mouse(m, panes),
+            Event::Mouse(m) => {
+                let result = self.route_mouse(m, panes);
+                if self.focused.is_none()
+                    && let Some(p) = panes.iter().find(|p| contains(p.area(), m.column, m.row))
+                {
+                    self.release_modifiers(*p);
+                }
+                result
+            }
             Event::Paste(text) => self.route_paste(text, panes),
             Event::FocusLost => {
+                let captured = self.captured.take();
+                if let Some((id, b)) = captured {
+                    self.canceled_buttons |= button_mask(b);
+                    if let Some(p) = find(panes, id) {
+                        p.slint_window().dispatch_event(WindowEvent::PointerExited);
+                    }
+                }
+                if let Some(id) = self.hovered.take()
+                    && Some(id) != captured.map(|(id, _)| id)
+                    && let Some(p) = find(panes, id)
+                {
+                    p.slint_window().dispatch_event(WindowEvent::PointerExited);
+                }
                 if let Some(p) = self.focused.and_then(|id| find(panes, id)) {
                     self.release_modifiers(p);
                     p.slint_window()
@@ -365,9 +406,14 @@ impl InputRouter {
             )
         };
 
+        if !matches!(m.kind, MouseEventKind::Down(_)) {
+            self.sync_pointer_modifiers(m.modifiers, hit, panes);
+        }
         match m.kind {
             MouseEventKind::Down(b) => {
+                self.canceled_buttons &= !button_mask(b);
                 if let Some(p) = self.captured.and_then(|(id, _)| find(panes, id)) {
+                    self.sync_pointer_modifiers(m.modifiers, Some(p), panes);
                     p.slint_window()
                         .dispatch_event(WindowEvent::PointerPressed {
                             position: pos(p),
@@ -377,7 +423,11 @@ impl InputRouter {
                 }
                 match hit {
                     Some(p) => {
+                        if self.focused != Some(p.id()) {
+                            self.dismiss_popup(b, panes);
+                        }
                         self.focus(p.id(), panes);
+                        self.sync_pointer_modifiers(m.modifiers, Some(p), panes);
                         self.set_hover(Some(p), panes);
                         self.captured = Some((p.id(), b));
                         p.slint_window()
@@ -388,21 +438,7 @@ impl InputRouter {
                         Routed::Consumed
                     }
                     None => {
-                        // A click outside every pane: let the focused pane see it at its
-                        // out-of-bounds position so open popups close, then hand focus back.
-                        if let Some(p) = self.focused.and_then(|id| find(panes, id)) {
-                            let position = pos(p);
-                            let w = p.slint_window();
-                            w.dispatch_event(WindowEvent::PointerPressed {
-                                position,
-                                button: button(b),
-                            });
-                            w.dispatch_event(WindowEvent::PointerReleased {
-                                position,
-                                button: button(b),
-                            });
-                            w.dispatch_event(WindowEvent::PointerExited);
-                        }
+                        self.dismiss_popup(b, panes);
                         self.blur(panes);
                         self.set_hover(None, panes);
                         Routed::Unhandled
@@ -410,6 +446,9 @@ impl InputRouter {
                 }
             }
             MouseEventKind::Up(b) => {
+                if self.canceled_buttons & button_mask(b) != 0 {
+                    return Routed::Consumed;
+                }
                 if let Some((id, held)) = self.captured
                     && let Some(p) = find(panes, id)
                 {
@@ -477,6 +516,35 @@ impl InputRouter {
                     });
                 Routed::Consumed
             }
+        }
+    }
+
+    fn sync_pointer_modifiers(
+        &mut self,
+        wanted: KeyModifiers,
+        target: Option<&dyn PaneInput>,
+        panes: &[&dyn PaneInput],
+    ) {
+        if let Some(p) = self.focused.and_then(|id| find(panes, id)).or(target) {
+            self.sync_modifiers(p, wanted);
+        }
+    }
+
+    fn dismiss_popup(&mut self, b: MouseButton, panes: &[&dyn PaneInput]) {
+        if let Some(p) = self.focused.and_then(|id| find(panes, id)) {
+            // Even overlapping panes need a position outside the old window, not the actual
+            // pointer position (which could otherwise click both components).
+            let position = LogicalPosition::new(-1.0, -1.0);
+            let w = p.slint_window();
+            w.dispatch_event(WindowEvent::PointerPressed {
+                position,
+                button: button(b),
+            });
+            w.dispatch_event(WindowEvent::PointerReleased {
+                position,
+                button: button(b),
+            });
+            w.dispatch_event(WindowEvent::PointerExited);
         }
     }
 
