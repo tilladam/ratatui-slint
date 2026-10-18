@@ -20,15 +20,15 @@ default = ["image-decoders"]
 ## `slint` crate only enables this through its windowing backends, so it is switched on here via a
 ## feature-only dependency on `i-slint-core`; no `i-slint-core` API is used.
 image-decoders = ["dep:i-slint-core"]
-## Render panes with an alpha channel (premultiplied in Slint, converted to straight alpha
-## for the image encoders). Off by default: panes are opaque.
+## Enable per-pane alpha output via set_transparency(true). Does not change default output.
+## Framebuffer storage becomes premultiplied RGBA; the borrowed view type stays stable.
 transparency = []
 
 [dependencies]
-slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts", "software-renderer-path", "image-default-formats"] }
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "renderer-software", "software-renderer-systemfonts", "software-renderer-path"] }
 ratatui = "0.30"
 crossterm = "0.29"
-ratatui-image = { version = "11.1", default-features = false, features = ["crossterm", "image-defaults"] }
+ratatui-image = { version = "11.1", default-features = false, features = ["crossterm"] }
 image = { version = "0.25", default-features = false, features = ["png"] }
 base64 = "0.22"
 # Sixel encoder, the same one ratatui-image uses; called directly to control image height.

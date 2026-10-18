@@ -13,7 +13,6 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 use std::sync::mpsc;
-use std::task::{Context, Poll, Waker};
 use std::time::{Duration, Instant, SystemTime};
 
 use crossterm::event::{Event, KeyCode, KeyEventKind};
@@ -27,18 +26,6 @@ use ratatui_slint::{
 };
 use slint_interpreter::{ComponentDefinition, ComponentInstance, DiagnosticLevel};
 
-/// The interpreter's compile future does no real I/O waiting; poll it to completion.
-fn block_on<F: std::future::Future>(fut: F) -> F::Output {
-    let mut fut = std::pin::pin!(fut);
-    let mut cx = Context::from_waker(Waker::noop());
-    loop {
-        if let Poll::Ready(v) = fut.as_mut().poll(&mut cx) {
-            return v;
-        }
-        std::thread::yield_now();
-    }
-}
-
 struct Build {
     definition: Option<ComponentDefinition>,
     diagnostics: Vec<(DiagnosticLevel, String)>,
@@ -48,7 +35,7 @@ struct Build {
 fn compile(path: &Path, component: Option<&str>) -> Build {
     let start = Instant::now();
     let compiler = slint_interpreter::Compiler::default();
-    let result = block_on(compiler.build_from_path(path));
+    let result = pollster::block_on(compiler.build_from_path(path));
     let diagnostics = result
         .diagnostics()
         .map(|d| {
@@ -362,6 +349,34 @@ mod tests {
                     .set_modified(SystemTime::UNIX_EPOCH + Duration::from_secs(seconds)),
             )
             .unwrap();
+    }
+
+    #[test]
+    fn compilation_imports_errors_and_reload_complete() {
+        // The default interpreter loader is synchronous; pollster must also complete on
+        // imported files and a failed compilation. A timeout detects a missed wakeup.
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let dir = TestDir(
+                std::env::temp_dir().join(format!("ratatui-slint-compile-{}", std::process::id())),
+            );
+            std::fs::create_dir_all(&dir.0).unwrap();
+            let main = dir.0.join("ui.slint");
+            std::fs::write(
+                dir.0.join("part.slint"),
+                "export component Part inherits Rectangle { background: red; }",
+            )
+            .unwrap();
+            std::fs::write(&main, "import { Part } from \"part.slint\"; export component Main inherits Window { Part {} }").unwrap();
+            assert!(compile(&main, None).definition.is_some());
+            std::fs::write(&main, "not valid Slint").unwrap();
+            assert!(compile(&main, None).definition.is_none());
+            std::fs::write(&main, "export component Reloaded inherits Window {}").unwrap();
+            assert!(compile(&main, Some("Reloaded")).definition.is_some());
+            tx.send(()).unwrap();
+        });
+        rx.recv_timeout(Duration::from_secs(20))
+            .expect("compiler did not complete");
     }
 
     #[test]
