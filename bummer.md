@@ -118,3 +118,24 @@ Next time: verified — keep upload → placeholders → delete: the pane stages
 Revisit when: kitty draws placeholders whose image arrives later.
 Cost: a release-hardening regression caught only by manual validation; one debugging session.
 Scope: global-candidate     Status: active
+
+## 2026-10-18 · AppleScript control of Terminal.app hung on a consent dialog · #validation #macos-automation
+Situation: driving real terminals for VALIDATION.md from Claude Code (Supacode) on macOS 27.0.1.
+Tried: `osascript -e 'tell application "Terminal" to do script ...'` (and `count windows`) to open a test window.
+Outcome: the calls blocked on macOS Automation consent and ended with "AppleEvent timed out (-1712)"; Terminal had also opened its startup window.
+Evidence: 2026-10-18, two runs past 60–120 s timeouts; iTerm2's first AppleScript call was similarly slow.
+Next time: verified — open a window with `open -a Terminal file.command` (Launch Services, no Apple Events), activate with `open -a <App>`, resize via System Events; close any startup window your launch created.
+Revisit when: Automation consent for the host app is already granted.
+Cost: two hung calls and a cleanup of an extra window.
+Scope: global-candidate     Status: active
+
+## 2026-10-18 · iTerm2 dropped the first injected keystroke after a program started · #validation #macos-automation #iterm2
+Situation: real-terminal validation with CGEvent key events posted into iTerm2 3.7.6.
+Tried: pressing `p` in sysmon (and `+` in hello) right after start.
+Outcome: the first key's press never arrived (only its release, under kitty keyboard flags); later keys arrived. Same with no keyboard flags, with iTerm2's `write text`, and with a HID event source. Terminal.app and WezTerm received the first key.
+Evidence: 2026-10-18 raw-input recordings from a minimal raw-mode Python reader in iTerm2.
+Hypothesis: iTerm2 behaviour with synthetic input; unconfirmed with a real keyboard.
+Next time: verified workaround — send one ignored warm-up key after each program start before the keys under test.
+Revisit when: a real-keyboard check in iTerm2 shows the first key arriving (then it is injection-only) or not (then report to iTerm2).
+Cost: one invalid sysmon/hello run and six probe runs.
+Scope: global-candidate     Status: active
