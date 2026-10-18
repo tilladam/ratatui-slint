@@ -102,7 +102,12 @@ pub enum Scale {
     Fixed(f32),
     /// Scale a design of this logical size so it fits the pane, keeping its aspect ratio.
     /// Suits UIs laid out for a fixed screen, such as an embedded touch panel.
-    Fit { width: f32, height: f32 },
+    Fit {
+        /// Design width in logical pixels.
+        width: f32,
+        /// Design height in logical pixels.
+        height: f32,
+    },
 }
 
 impl Scale {
@@ -152,11 +157,13 @@ pub struct FrameStats {
 
 /// The object-safe view of a pane that the input router needs.
 pub trait PaneInput {
+    /// The pane's identity, stable for its lifetime.
     fn id(&self) -> PaneId;
     /// The cell area the pane occupies on screen.
     fn area(&self) -> Rect;
     /// Terminal cell size in pixels.
     fn font_size(&self) -> FontSize;
+    /// The Slint window that receives the pane's events.
     fn slint_window(&self) -> &slint::Window;
 }
 
@@ -255,6 +262,7 @@ impl<C: ComponentHandle> SlintPane<C> {
         &self.component
     }
 
+    /// The pane's identity, for input routing and focus.
     pub fn id(&self) -> PaneId {
         self.id
     }
@@ -529,6 +537,7 @@ impl<C: ComponentHandle> SlintPane<C> {
 
 /// Lets [`crate::SlintWidget`] draw any pane regardless of its component type.
 pub trait PaneRender {
+    /// Renders the pane into `area` of `buf`.
     fn render_pane(&mut self, area: Rect, buf: &mut Buffer);
 }
 

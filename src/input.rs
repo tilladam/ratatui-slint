@@ -32,11 +32,14 @@ pub enum Routed {
 /// A key combination, compared against press events.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct KeyBinding {
+    /// The key.
     pub code: KeyCode,
+    /// The modifiers that must be held, exactly.
     pub modifiers: KeyModifiers,
 }
 
 impl KeyBinding {
+    /// A binding for `code` with exactly `modifiers` held.
     pub const fn new(code: KeyCode, modifiers: KeyModifiers) -> Self {
         Self { code, modifiers }
     }
@@ -158,6 +161,7 @@ impl Default for InputRouter {
 }
 
 impl InputRouter {
+    /// A router with no focused pane, the default exit key and 3 lines per wheel step.
     pub fn new() -> Self {
         Self {
             focused: None,
@@ -186,6 +190,7 @@ impl InputRouter {
         self.scroll_lines = lines;
     }
 
+    /// The pane with keyboard focus, if any.
     pub fn focused(&self) -> Option<PaneId> {
         self.focused
     }

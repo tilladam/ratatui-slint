@@ -9,7 +9,10 @@ repository = "https://github.com/tilladam/ratatui-slint"
 readme = "README.md"
 keywords = ["ratatui", "slint", "tui", "terminal", "gui"]
 categories = ["command-line-interface", "gui"]
-exclude = ["spike/"]
+include = ["src/**", "examples/*.rs", "tests/**", "README.md", "LICENSE"]
+
+[package.metadata.docs.rs]
+all-features = true
 
 [features]
 default = ["image-decoders"]

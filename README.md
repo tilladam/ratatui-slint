@@ -11,6 +11,8 @@ under the pointer or in focus, and keys Slint rejects fall back to ratatui.
 
 https://github.com/user-attachments/assets/8172ce62-0ec5-464e-a368-481e82aad6dc
 
+[▶ Demo video](https://github.com/user-attachments/assets/8172ce62-0ec5-464e-a368-481e82aad6dc)
+
 Status: pre-release. The headless tests pass, and every example passes scripted checks under a
 simulated terminal. The examples have been run by hand in kitty, Ghostty, WezTerm, iTerm2 and
 Terminal.app. tmux and SSH are untested. See [PLAN.md](PLAN.md) for the design, measurements

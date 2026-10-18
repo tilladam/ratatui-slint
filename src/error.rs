@@ -7,6 +7,7 @@ pub enum Error {
     Platform(String),
     /// The component factory failed, or the component could not be shown.
     Component(String),
+    /// Reading from or writing to the terminal failed.
     Io(std::io::Error),
 }
 

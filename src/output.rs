@@ -28,6 +28,7 @@ pub struct CountingWriter<W> {
 }
 
 impl<W> CountingWriter<W> {
+    /// Wraps `inner`, starting the count at zero.
     pub fn new(inner: W) -> Self {
         Self {
             inner,
@@ -40,6 +41,7 @@ impl<W> CountingWriter<W> {
         ByteCounter(self.count.clone())
     }
 
+    /// The wrapped writer.
     pub fn inner(&self) -> &W {
         &self.inner
     }
@@ -62,6 +64,7 @@ impl<W: Write> Write for CountingWriter<W> {
 pub struct ByteCounter(Arc<AtomicU64>);
 
 impl ByteCounter {
+    /// Bytes written so far.
     pub fn get(&self) -> u64 {
         self.0.load(Ordering::Relaxed)
     }

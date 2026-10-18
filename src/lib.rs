@@ -42,6 +42,8 @@
 //! # Ok(()) }
 //! ```
 
+#![warn(missing_docs)]
+
 mod encode;
 mod error;
 pub mod input;

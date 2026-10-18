@@ -27,8 +27,11 @@ pub type SessionTerminal = Terminal<CrosstermBackend<CountingWriter<Stdout>>>;
 /// What to enable when the session starts.
 #[derive(Clone, Debug)]
 pub struct TerminalOptions {
+    /// Report mouse clicks, motion and wheel events.
     pub mouse: bool,
+    /// Deliver pasted text as one paste event instead of keystrokes.
     pub bracketed_paste: bool,
+    /// Report when the terminal window gains or loses focus.
     pub focus_change: bool,
     /// Ask for the kitty keyboard protocol, so key releases and repeats are reported.
     pub keyboard_enhancement: bool,
@@ -41,6 +44,8 @@ pub struct TerminalOptions {
     /// Force a protocol instead of detecting one. The `RATATUI_SLINT_PROTOCOL` environment
     /// variable (`halfblocks`, `sixel`, `kitty`, `iterm2`) overrides this.
     pub protocol: Option<ProtocolType>,
+    /// How long to wait for the terminal to answer the graphics and cell-size queries. Without
+    /// an answer the session falls back to half-blocks.
     pub query_timeout: Duration,
 }
 
@@ -61,7 +66,9 @@ impl Default for TerminalOptions {
 /// An initialised terminal plus what was learned about it. Restores the terminal on drop and on
 /// panic.
 pub struct TerminalSession {
+    /// The ratatui terminal to draw with.
     pub terminal: SessionTerminal,
+    /// The detected graphics protocol and cell size. Pass to [`crate::Runtime::create_pane`].
     pub picker: Picker,
     /// Whether the kitty keyboard protocol was enabled. Pass to
     /// [`crate::InputRouter::set_keyboard_enhanced`].
