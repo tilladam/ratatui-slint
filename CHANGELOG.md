@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0 — unreleased
+## 0.1.0 — 2026-10-19
 
 Initial release: embed Slint components in ratatui with software-rendered Kitty, sixel, iTerm2,
 and half-block output, bounded background encoding, focus/input routing, and terminal sessions.
