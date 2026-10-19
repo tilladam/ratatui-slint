@@ -13,9 +13,8 @@ under the pointer or in focus, and keys Slint rejects fall back to ratatui.
 
 [▶ Demo video](https://github.com/user-attachments/assets/8172ce62-0ec5-464e-a368-481e82aad6dc)
 
-Status: pre-release, targeting Linux and macOS. The earlier examples were exercised by hand in
-kitty, Ghostty, WezTerm, iTerm2 and Terminal.app. The release hardening changes still require
-fresh real-terminal validation; simulated-terminal tests cannot verify image display. Windows,
+Status: early (0.1), targeting Linux and macOS. Validated by hand on macOS in kitty, Ghostty,
+WezTerm, iTerm2 and Terminal.app; testers reported WezTerm and Konsole working on Linux. Windows,
 tmux and SSH are unverified. See the
 [integration guide](https://github.com/tilladam/ratatui-slint/blob/main/docs/INTEGRATION.md) and
 [release validation matrix](https://github.com/tilladam/ratatui-slint/blob/main/docs/VALIDATION.md).
@@ -58,6 +57,7 @@ The protocol is detected at startup.
 | WezTerm | iTerm2 (sixel also works when forced) | 60 fps at 80×24; forced sixel 54 fps |
 | iTerm2 | iTerm2 | 14 fps, limited by iTerm2's image decoding |
 | Terminal.app | half-blocks | 60 fps, at low resolution |
+| Konsole (Linux) | half-blocks (sixel works when forced) | reported working, not measured |
 
 These numbers were measured once each on a single Mac with a Retina display, so treat them as
 rough. Run `termbench` to measure your own terminal.

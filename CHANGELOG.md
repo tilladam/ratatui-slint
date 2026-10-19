@@ -12,5 +12,6 @@ alpha output requires explicit per-pane opt-in. Input/thread errors are surfaced
 preserved. Stable Kitty IDs and unconditional broad image decoders have been removed.
 
 Linux/macOS are the release targets. Real terminals were validated on macOS (kitty, Ghostty,
-WezTerm, iTerm2, Terminal.app); Linux is covered by CI and the fake terminal only. Windows, tmux
-and SSH remain unverified. See docs/INTEGRATION.md and docs/VALIDATION.md.
+WezTerm, iTerm2, Terminal.app). On Linux, CI and the fake terminal cover the library, and testers
+reported WezTerm and Konsole working; Konsole uses half-blocks unless sixel is forced. Windows,
+tmux and SSH remain unverified. See docs/INTEGRATION.md and docs/VALIDATION.md.

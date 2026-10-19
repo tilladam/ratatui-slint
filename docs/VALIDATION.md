@@ -71,8 +71,14 @@ from kitty but mouse input sent as SGR reports, so Kitty's own mouse handling wa
 Shift+click interception and mouse input after exit were not checked with a real mouse there.
 WezTerm, iTerm2 and Terminal.app with real macOS mouse and keyboard events, with window
 screenshots judged by eye and animation judged by comparing consecutive captures. In each, focus
-loss mid-drag was a real application switch. Linux terminals were not run; Linux is covered by CI
-and the fake terminal only.
+loss mid-drag was a real application switch. Linux terminals were not run in this session.
+
+On 2026-10-19 a tester reported WezTerm on Linux working, smooth and with working input. They
+also reported that Konsole auto-detects half-blocks and works with sixel when forced with
+`RATATUI_SLINT_PROTOCOL=sixel`. A second tester also reported Linux working. Versions,
+distributions, geometry and the cases run were not recorded, so these reports have no table rows.
+Konsole gets half-blocks because ratatui-image 11.1 excludes sixel and kitty whenever
+`KONSOLE_VERSION` is set, citing Konsole's sixel bugs; its README calls the 24.12 fix incomplete.
 
 Findings, none of them a library defect:
 
@@ -103,6 +109,13 @@ Expected overlay behaviour in examples/overlay.rs differs by protocol. Kitty kee
 around the overlay box. Sixel and iTerm2 draw the whole image from the first cell, which the box
 covers, so the pane stays frozen until `o` hides the box and then animates again; that is a pass.
 
-Run a current RustSec advisory audit before publishing. cargo-audit was not installed in the
-local implementation environment; lack of a local audit is not evidence of no advisories.
+Run a current RustSec advisory audit before publishing. Last run on 2026-10-19 at 13a964b with
+cargo-audit 0.22.2 and 1338 advisories: no vulnerabilities, exit status 0, and four informational
+`unmaintained` warnings for bincode 2.0.1 (RUSTSEC-2025-0141), zbus_names 4.3.4
+(RUSTSEC-2026-0371), zvariant 5.15.0 (RUSTSEC-2026-0370) and zvariant_derive 5.15.0
+(RUSTSEC-2026-0372). None of the four is compiled. `cargo tree -e all -i` finds no path to them
+for Linux, macOS, Windows or wasm32 in this workspace, and none for `--target all` in a fresh
+consumer with a path dependency. They are Cargo.lock entries for unused optional dependencies in
+Slint's dependency tree, so a consumer's audit reports the same four advisories. Removing them
+needs a Slint release on zbus 6 without bincode; repeat the audit after each Slint upgrade.
 Publication remains separate from implementation and requires these remaining release checks.
